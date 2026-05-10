@@ -22,6 +22,7 @@ services:
     profiles: ["eval"]
     environment:
       WORLD_API_URL: "http://world:8000"
+      LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
       LLM_BASE_URL: "${LLM_BASE_URL:-}"
       LLM_API_KEY: "${LLM_API_KEY:-}"
       LLM_MODEL: "${LLM_MODEL:-}"

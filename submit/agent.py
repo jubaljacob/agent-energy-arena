@@ -9,6 +9,12 @@ committed baseline score on seed 42.
 Participants replace this file with their own agent.  The minimal
 contract is: a class named `Agent` with `__init__(api, *, seed=None)`
 and a `play_game(self) -> dict` method (see `agents/base.py`).
+
+To use the bundled LLM ReAct reference instead, set the LLM env vars
+(see `agents/llm.py` — `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL`) and
+replace the import below:
+
+    from agents.llm_react import LLMReactAgent as Agent
 """
 
 from __future__ import annotations
