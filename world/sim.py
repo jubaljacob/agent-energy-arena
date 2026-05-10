@@ -21,7 +21,15 @@ from world.catalog import TILE_CATALOG, is_buildable
 from world.config import Config, load_config
 from world.grid import has_road_adjacency, in_bounds
 from world.population import update_population
+from world.power import total_demand_kw
 from world.state import Tile, WorldState
+from world.weather import (
+    INITIAL_CLOUD_FACTOR,
+    INITIAL_WIND_DIRECTION_DEG,
+    derive_phi_seed,
+    step_weather_one_hour,
+    v_mean,
+)
 
 
 def _tile_to_dict(t: Tile) -> dict[str, Any]:
@@ -54,6 +62,7 @@ class World:
         self.state: WorldState = WorldState(seed=self.config.world_seed)
         self.sim_rng: np.random.Generator
         self.forecast_rng: np.random.Generator
+        self.wind_phi_seed: float = 0.0
         self._tile_seq: int = 0
         self.reset(seed=self.config.world_seed)
 
@@ -76,6 +85,7 @@ class World:
         self.sim_rng = np.random.default_rng(sim_seed)
         self.forecast_rng = np.random.default_rng(forecast_seed)
 
+        self.wind_phi_seed = derive_phi_seed(seed_used)
         self.state = WorldState(
             seed=seed_used,
             day=0,
@@ -84,6 +94,12 @@ class World:
             population=int(self.config.starting_pop),
             happiness=1.0,
         )
+        # Seed the AR(1) carry-overs at their long-run means so the first
+        # hour's update is well-conditioned (no transient from a 0 init).
+        self.state.weather_now["cloud_factor"] = INITIAL_CLOUD_FACTOR
+        self.state.weather_now["wind_speed_mps"] = v_mean(0, self.wind_phi_seed)
+        self.state.weather_now["wind_direction_deg"] = INITIAL_WIND_DIRECTION_DEG
+        self.state.weather_now["solar_irradiance"] = 0.0
         self._tile_seq = 0
         self._place_town_hall()
 
@@ -219,7 +235,11 @@ class World:
 
         for hour in range(self.config.ticks_per_day):
             self.state.hour = hour
-            # placeholder for hourly dynamics; intentionally empty.
+            # Each hour: 3 sim_rng draws (cloud, wind speed, wind dir) then
+            # the deterministic demand calculation. These per-hour draws are
+            # what now anchors the slice-01 step-size determinism contract.
+            step_weather_one_hour(self)
+            self.state.power_now["demand_kw"] = total_demand_kw(self.state, hour)
 
         # End-of-day OPEX accrual: every standing tile pays its daily OPEX.
         opex_total = sum(t.opex_per_day for t in self.state.tiles)
@@ -228,12 +248,9 @@ class World:
             self.state.today_summary_so_far["opex"] = opex_total
 
         # Population dynamics + tax revenue (brief §4.8). Deterministic; no
-        # RNG draws, so the sim_rng contract below is unaffected.
+        # RNG draws, so the sim_rng contract is unaffected.
         update_population(self)
 
-        # One mandatory daily draw locks in the "RNG advances per simulated
-        # day" contract — even an empty world advances the stream.
-        _ = self.sim_rng.standard_normal()
         self.state.day += 1
         self.state.hour = 0
 

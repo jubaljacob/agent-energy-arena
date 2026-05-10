@@ -20,6 +20,10 @@ class TileSpec:
     description: str
     housing_capacity: int = 0
     jobs: int = 0
+    # Peak electric demand in kW for this tile type. Commercial scales by an
+    # hourly factor (full 8-20h, 20% otherwise); industrial draws this value
+    # continuously. See world.power.total_demand_kw.
+    demand_kw: float = 0.0
     buildable: bool = True  # False = not placeable via /build (town_hall, wells)
 
 
@@ -44,8 +48,9 @@ TILE_CATALOG: dict[str, TileSpec] = {
         capex=8_000,
         opex_per_day=50,
         requires_road=True,
-        description="+12 jobs. 50 kW peak demand. Requires road adjacency.",
+        description="+12 jobs. 50 kW peak demand (8-20h, 20% otherwise). Requires road adjacency.",
         jobs=12,
+        demand_kw=50,
     ),
     "industrial": TileSpec(
         tile_type="industrial",
@@ -54,6 +59,7 @@ TILE_CATALOG: dict[str, TileSpec] = {
         requires_road=True,
         description="+30 jobs. 300 kW continuous demand. Requires road adjacency.",
         jobs=30,
+        demand_kw=300,
     ),
     "park": TileSpec(
         tile_type="park",
@@ -94,6 +100,7 @@ def build_catalog() -> dict[str, Any]:
                 "description": spec.description,
                 "housing_capacity": spec.housing_capacity,
                 "jobs": spec.jobs,
+                "demand_kw": spec.demand_kw,
                 "buildable": spec.buildable,
             }
         )
