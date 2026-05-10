@@ -81,6 +81,15 @@ def create_app(world: World | None = None, action_log: ActionLog | None = None) 
     def get_state() -> dict[str, Any]:
         return app.state.world.state_dict()
 
+    @app.get("/events")
+    def get_events() -> dict[str, Any]:
+        s = app.state.world.state
+        return {
+            "active": list(s.active_events),
+            "historical": list(s.historical_events),
+            "regulatory_tightenings_applied": s.regulatory_tightenings_applied,
+        }
+
     @app.get("/forecast")
     def get_forecast(hours: int = 24) -> dict[str, Any]:
         if hours < 1 or hours > 168:

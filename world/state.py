@@ -58,6 +58,11 @@ class WorldState:
     tiles: list[Tile] = field(default_factory=list)
     wells: list[Well] = field(default_factory=list)
     active_events: list[dict[str, Any]] = field(default_factory=list)
+    historical_events: list[dict[str, Any]] = field(default_factory=list)
+    # Cumulative count of regulatory-tightening events fired this game (capped
+    # at REGULATORY_TIGHTENING_MAX_OCCURRENCES = 3). After the cap, additional
+    # rolls are skipped.
+    regulatory_tightenings_applied: int = 0
 
     # Blackout hours from the previous simulated day. Drives the happiness
     # penalty in `world.population.update_population`. Stays at 0.0 until the

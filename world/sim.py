@@ -29,6 +29,11 @@ from world.economy import (
     refinery_process_kw,
     route_crude,
 )
+from world.events import (
+    expire_finite_events,
+    fuel_price_shock_multiplier,
+    sample_and_apply_events,
+)
 from world.grid import has_road_adjacency, in_bounds
 from world.population import update_population
 from world.power import (
@@ -115,6 +120,7 @@ class World:
         self.state: WorldState = WorldState(seed=self.config.world_seed)
         self.sim_rng: np.random.Generator
         self.forecast_rng: np.random.Generator
+        self.event_rng: np.random.Generator
         self.wind_phi_seed: float = 0.0
         self._tile_seq: int = 0
         self._well_seq: int = 0
@@ -143,9 +149,15 @@ class World:
     def reset(self, seed: int | None = None) -> None:
         seed_used = self.config.world_seed if seed is None else int(seed)
         master = np.random.SeedSequence(seed_used)
-        sim_seed, forecast_seed = master.spawn(2)
+        # Three independent streams: sim drives world dynamics (weather, etc.),
+        # forecast drives /forecast noise, event drives the slice-11 daily
+        # event rolls. SeedSequence.spawn(n) is incremental, so adding a third
+        # child preserves the exact bytes of children 0/1 — sim_rng and
+        # forecast_rng remain identical to the slice-01 baseline.
+        sim_seed, forecast_seed, event_seed = master.spawn(3)
         self.sim_rng = np.random.default_rng(sim_seed)
         self.forecast_rng = np.random.default_rng(forecast_seed)
+        self.event_rng = np.random.default_rng(event_seed)
 
         self.wind_phi_seed = derive_phi_seed(seed_used)
         self.state = WorldState(
@@ -421,7 +433,7 @@ class World:
                 "population_start": pop_start,
                 "population_end": self.state.population,
                 "happiness": self.state.happiness,
-                "events_active": [],
+                "events_active": list(self.state.active_events),
             },
             treasury_after=self.state.treasury,
         )
@@ -431,6 +443,17 @@ class World:
         # callers can read per-day P&L from `state.today_summary_so_far`.
         for k in self.state.today_summary_so_far:
             self.state.today_summary_so_far[k] = 0.0
+
+        # Events (slice 11): expire yesterday's finished events first (so a
+        # fresh roll today doesn't get stomped by an immediate expiry), then
+        # roll new events from event_rng. Effects apply via:
+        #  - heatwave / demand_surprise: read by world.power.total_demand_kw
+        #  - fuel_price_shock: read at the end-of-day fuel-cost step below
+        #  - plant_failure: sets tile.operational=False; dispatch already
+        #    filters non-operational plants
+        #  - regulatory_tightening: bumps state.carbon_price immediately.
+        expire_finite_events(self)
+        sample_and_apply_events(self)
 
         # Per-hour traces for the most-recently-completed day. Reset here and
         # pinned to last_day_* fields once the day finishes.
@@ -571,13 +594,15 @@ class World:
             self.state.treasury -= opex_total
             self.state.today_summary_so_far["opex"] = opex_total
 
-        # Fuel cost (kWh / 1000 = MWh) × $/MWh. Coal+gas only.
+        # Fuel cost (kWh / 1000 = MWh) × $/MWh. Coal+gas only. A
+        # fuel_price_shock event (slice 11) doubles both costs while active.
         if coal_kwh or gas_kwh:
             coal_cost_per_mwh = TILE_CATALOG["coal_plant"].fuel_cost_per_mwh
             gas_cost_per_mwh = TILE_CATALOG["gas_peaker"].fuel_cost_per_mwh
-            fuel_total = (coal_kwh / 1000.0) * coal_cost_per_mwh + (
-                gas_kwh / 1000.0
-            ) * gas_cost_per_mwh
+            shock = fuel_price_shock_multiplier(self.state)
+            fuel_total = shock * (
+                (coal_kwh / 1000.0) * coal_cost_per_mwh + (gas_kwh / 1000.0) * gas_cost_per_mwh
+            )
             self.state.treasury -= fuel_total
             self.state.today_summary_so_far["fuel_cost"] = fuel_total
 
@@ -725,7 +750,9 @@ class World:
             "tiles": [_tile_to_dict(t) for t in s.tiles],
             "wells": [_well_to_dict(w) for w in s.wells],
             "reservoirs_revealed": reservoirs_summary(self.subsurface, top_k=10),
-            "active_events": [],
+            "active_events": list(s.active_events),
+            "historical_events": list(s.historical_events),
+            "regulatory_tightenings_applied": s.regulatory_tightenings_applied,
             "weather_now": s.weather_now,
             "power_now": s.power_now,
             "last_day_supply_kw_by_hour": list(s.last_day_supply_kw_by_hour),

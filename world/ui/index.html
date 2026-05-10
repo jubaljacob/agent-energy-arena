@@ -19,6 +19,7 @@
     <button class="tab" data-tab="power">Power</button>
     <button class="tab" data-tab="subsurface">Subsurface</button>
     <button class="tab" data-tab="wells">Wells</button>
+    <button class="tab" data-tab="events">Events</button>
   </nav>
   <main>
     <section id="tab-map" class="tabpanel active">
@@ -102,6 +103,40 @@
         </table>
         <h2>Finance — yesterday</h2>
         <ul id="financelist" class="finance-list"></ul>
+      </div>
+    </section>
+    <section id="tab-events" class="tabpanel">
+      <div id="eventswrap">
+        <h2>Active events</h2>
+        <table id="eventstable">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Started day</th>
+              <th>Ends day</th>
+              <th>Days left</th>
+              <th>Severity / detail</th>
+            </tr>
+          </thead>
+          <tbody id="eventstable-body"></tbody>
+        </table>
+        <h2>History (most recent first)</h2>
+        <table id="eventshistorytable">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Started day</th>
+              <th>Ends day</th>
+              <th>Severity / detail</th>
+            </tr>
+          </thead>
+          <tbody id="eventshistorytable-body"></tbody>
+        </table>
+        <p class="events-hint">
+          Events sample once at the start of each simulated day from a
+          dedicated <code>event_rng</code> stream. Regulatory tightening
+          is capped at 3 occurrences per game.
+        </p>
       </div>
     </section>
     <section id="tab-power" class="tabpanel">

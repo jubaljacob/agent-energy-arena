@@ -34,6 +34,8 @@
   let rows = 32;
   let tiles = [];
   let wells = [];
+  let activeEvents = [];
+  let historicalEvents = [];
   let summary = {};
   let treasury = 0;
   let catalog = null;
@@ -621,6 +623,76 @@
     }
   }
 
+  // Events tab rendering ----------------------------------------------------
+  const eventsTableBody = document.getElementById("eventstable-body");
+  const eventsHistoryBody = document.getElementById("eventshistorytable-body");
+
+  function eventDetail(e) {
+    if (e.type === "plant_failure") return `plant_id=${e.plant_id || "?"}`;
+    if (e.type === "regulatory_tightening") {
+      const occ = e.occurrences_after != null ? ` (#${e.occurrences_after})` : "";
+      return `carbon_price → $${(e.severity || 0).toFixed(2)}${occ}`;
+    }
+    return `×${(e.severity || 1).toFixed(2)}`;
+  }
+
+  function renderEvents(today) {
+    if (!eventsTableBody) return;
+    eventsTableBody.innerHTML = "";
+    if (activeEvents.length === 0) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 5;
+      td.style.color = "#5a5d65";
+      td.style.fontSize = "0.8rem";
+      td.style.textAlign = "center";
+      td.textContent = "no active events";
+      tr.appendChild(td);
+      eventsTableBody.appendChild(tr);
+    } else {
+      for (const e of activeEvents) {
+        const tr = document.createElement("tr");
+        const ends = e.ends_day == null ? "—" : e.ends_day;
+        const left = e.ends_day == null ? "permanent" : Math.max(0, e.ends_day - today);
+        tr.innerHTML = `
+          <td>${e.type}</td>
+          <td>${e.started_day}</td>
+          <td>${ends}</td>
+          <td>${left}</td>
+          <td>${eventDetail(e)}</td>
+        `;
+        eventsTableBody.appendChild(tr);
+      }
+    }
+    if (eventsHistoryBody) {
+      eventsHistoryBody.innerHTML = "";
+      const recent = historicalEvents.slice(-50).reverse();
+      if (recent.length === 0) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 4;
+        td.style.color = "#5a5d65";
+        td.style.fontSize = "0.8rem";
+        td.style.textAlign = "center";
+        td.textContent = "no past events";
+        tr.appendChild(td);
+        eventsHistoryBody.appendChild(tr);
+      } else {
+        for (const e of recent) {
+          const tr = document.createElement("tr");
+          const ends = e.ends_day == null ? "—" : e.ends_day;
+          tr.innerHTML = `
+            <td>${e.type}</td>
+            <td>${e.started_day}</td>
+            <td>${ends}</td>
+            <td>${eventDetail(e)}</td>
+          `;
+          eventsHistoryBody.appendChild(tr);
+        }
+      }
+    }
+  }
+
   async function tick() {
     try {
       const res = await fetch("/state");
@@ -635,6 +707,8 @@
       }
       tiles = s.tiles || [];
       wells = s.wells || [];
+      activeEvents = s.active_events || [];
+      historicalEvents = s.historical_events || [];
       summary = s.today_summary_so_far || {};
       treasury = s.treasury;
       els.day.textContent = s.day;
@@ -649,6 +723,7 @@
       renderWells();
       renderRefineries();
       renderFinance();
+      renderEvents(s.day);
       drawGrid();
       // Refresh revealed voxels lazily when the subsurface tab is visible.
       const subPanel = document.getElementById("tab-subsurface");
