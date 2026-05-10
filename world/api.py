@@ -91,13 +91,13 @@ def create_app(world: World | None = None, action_log: ActionLog | None = None) 
                 "summary": summary.summary,
                 "treasury_after": summary.treasury_after,
             }
-            app.state.action_log.append("/step", params, ok=True, result={
-                "day_completed": summary.day_completed
-            })
+            app.state.action_log.append(
+                "/step", params, ok=True, result={"day_completed": summary.day_completed}
+            )
             return result
         except ValueError as exc:
             app.state.action_log.append("/step", params, ok=False, error=str(exc))
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/build")
     def post_build(body: BuildBody) -> dict[str, Any]:

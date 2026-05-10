@@ -86,9 +86,7 @@ def test_build_rejection_returns_200_with_error_and_logs(tmp_path: Path) -> None
     assert body["error"] == "no_road_adjacency"
 
     entries = [json.loads(line) for line in log.path.read_text().splitlines()]
-    build_failures = [
-        e for e in entries if e["endpoint"] == "/build" and e["ok"] is False
-    ]
+    build_failures = [e for e in entries if e["endpoint"] == "/build" and e["ok"] is False]
     assert len(build_failures) == 1
     assert build_failures[0]["error"] == "no_road_adjacency"
 

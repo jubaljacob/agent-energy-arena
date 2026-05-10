@@ -20,9 +20,7 @@ def in_bounds(x: int, y: int, w: int, h: int) -> bool:
     return 0 <= x < w and 0 <= y < h
 
 
-def road_connected_set(
-    tiles: Iterable[Tile], world_w: int, world_h: int
-) -> set[tuple[int, int]]:
+def road_connected_set(tiles: Iterable[Tile], world_w: int, world_h: int) -> set[tuple[int, int]]:
     """4-connected flood-fill of road/town_hall tiles starting from town hall.
 
     Returns the set of (x, y) coordinates reachable. Empty if no town hall
@@ -56,14 +54,9 @@ def road_connected_set(
     return seen
 
 
-def has_road_adjacency(
-    x: int, y: int, tiles: Iterable[Tile], world_w: int, world_h: int
-) -> bool:
+def has_road_adjacency(x: int, y: int, tiles: Iterable[Tile], world_w: int, world_h: int) -> bool:
     """True iff (x, y) has an orthogonal neighbor inside the town-hall road network."""
     network = road_connected_set(tiles, world_w, world_h)
     if not network:
         return False
-    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-        if (x + dx, y + dy) in network:
-            return True
-    return False
+    return any((x + dx, y + dy) in network for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))

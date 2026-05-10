@@ -47,7 +47,7 @@ def test_house_without_road_adjacency_rejected():
     assert res["ok"] is False
     assert res["error"] == "no_road_adjacency"
     # World unchanged.
-    assert all(not (t.type == "house") for t in w.state.tiles)
+    assert all(t.type != "house" for t in w.state.tiles)
 
 
 def test_island_road_does_not_count_as_network():
