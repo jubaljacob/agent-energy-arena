@@ -64,10 +64,11 @@ class WorldState:
     # rolls are skipped.
     regulatory_tightenings_applied: int = 0
 
-    # Blackout hours from the previous simulated day. Drives the happiness
-    # penalty in `world.population.update_population`. Stays at 0.0 until the
-    # power-dispatch slice (05) starts populating it.
+    # Outage hours from the previous simulated day. Both feed the happiness
+    # penalty in `world.population.update_population`. Stay at 0.0 until the
+    # power-dispatch slice (05) starts populating them.
     yesterday_blackout_hours: float = 0.0
+    yesterday_brownout_hours: float = 0.0
 
     # Mutable carbon price ($/ton). Initialised to CARBON_PRICE_USD_PER_TON on
     # /reset; slice 11's regulatory-tightening events bump it (capped at 3
@@ -118,6 +119,7 @@ class WorldState:
             "gas_kwh": 0.0,
             "refined_bbl": 0.0,
             "blackout_hours": 0.0,
+            "brownout_hours": 0.0,
             "blackout_penalty": 0.0,
             "renewable_share": 0.0,
             "injection_kw": 0.0,

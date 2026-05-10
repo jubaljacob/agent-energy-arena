@@ -47,9 +47,11 @@ R_CURTAILMENT: float = 1.15
 R_BALANCED: float = 0.95
 R_BROWNOUT: float = 0.70
 
-# Per-hour happiness penalties (brief §4.4 / PRD AC for slice 05).
-BLACKOUT_HAPPINESS_PENALTY: float = 0.20
-BROWNOUT_HAPPINESS_COEF: float = 0.05  # multiplied by (1 - R)
+# Per-hour happiness penalties from outages live in
+# `world.population` as BLACKOUT_HAPPINESS_PER_HOUR /
+# BROWNOUT_HAPPINESS_PER_HOUR. The hourly-decrement-on-state.happiness
+# pattern was removed in issue 22 — `update_population` reassigns
+# happiness end-of-day, so per-hour writes were silently clobbered.
 
 # Plant types that participate in dispatch.
 RENEWABLE_TYPES: frozenset[str] = frozenset({"solar_farm", "wind_turbine"})

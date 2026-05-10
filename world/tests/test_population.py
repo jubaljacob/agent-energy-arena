@@ -113,8 +113,18 @@ def test_job_decline_one_day_from_fresh_world():
 
 
 def test_job_decline_70_days_approaches_equilibrium():
-    """After 70 simulated days, pop floors at jobs/0.7 ≈ 42-43."""
+    """After 70 simulated days, pop floors at jobs/0.7 ≈ 42-43.
+
+    A gas peaker is force-placed so the fresh world isn't blacking out
+    every hour — without it, the issue-22 happiness-decline branch
+    cascades pop past the job-floor down toward 0."""
     w = _fresh_world()
+    _inject_tile(w, type="gas_peaker", x=0, y=0)
+    w.state.tiles[-1].current_output_kw = 0.0
+    # Set the catalog-driven capacity field so dispatch sees a usable plant.
+    w.state.tiles[-1].opex_per_day = 150.0
+    # Mark capacity_kw via the tile-spec is implicit (catalog read on dispatch);
+    # the gas peaker spec already provides 500 kW @ 50%/h ramp.
     w.step(days=7)
     for _ in range(9):
         w.step(days=7)
@@ -131,15 +141,80 @@ def test_happiness_decline_when_below_threshold():
     # Inject abundant capacity+jobs so the first three branches are skipped.
     _inject_tile(w, type="commercial", x=5, y=5, jobs=1000, housing_capacity=1000)
     w.state.population = 100
-    # Happiness term is `-0.10 * (yest_blackout_hours / 24)`. To force
-    # happiness below 0.5 we need penalty > 0.5, i.e. blackout_hours > 120.
+    # Per-hour blackout coefficient is BLACKOUT_HAPPINESS_PER_HOUR = 0.05.
+    # 24h+ of blackouts saturates happiness at 0.0 (after [0, 1.5] clip).
     w.state.yesterday_blackout_hours = 200.0
 
     update_population(w)
-    # happiness = 1.0 - 0.10 * 200/24 ≈ 0.167 (below 0.5 threshold).
+    # happiness ≈ max(0, 1 - 0.05 * 200) = max(0, -9) = 0.
     assert w.state.happiness < 0.5
     # pop = 100 * 0.99 = 99.
     assert w.state.population == 99
+
+
+def test_full_day_blackout_drops_happiness_below_threshold():
+    """24h of blackout in a single day pins happiness at 0 (clipped)."""
+    w = _fresh_world()
+    _inject_tile(w, type="commercial", x=5, y=5, jobs=1000, housing_capacity=1000)
+    w.state.population = 100
+    w.state.yesterday_blackout_hours = 24.0
+
+    update_population(w)
+    # 1.0 - 0.05 * 24 = -0.20 → clipped to 0.0.
+    assert w.state.happiness == pytest.approx(0.0)
+    # 100 * 0.99 = 99 → int → 99.
+    assert w.state.population == 99
+
+
+def test_eleven_hour_blackout_crosses_decline_threshold():
+    """The threshold is exactly `< 0.5`; with coef 0.05/h, 10h leaves happiness
+    at 0.5 (no decline) and 11h drops it below 0.5 (decline fires)."""
+    w = _fresh_world()
+    _inject_tile(w, type="commercial", x=5, y=5, jobs=1000, housing_capacity=1000)
+    w.state.population = 100
+    w.state.yesterday_blackout_hours = 10.0
+
+    update_population(w)
+    # 1.0 - 0.5 = 0.5 → not less-than-0.5 → no decline branch.
+    assert w.state.happiness == pytest.approx(0.5)
+    # First three branches are also satisfied for growth; check that
+    # neither growth nor decline overshoots: pop should be unchanged or
+    # grow modestly (jobs-pop=900, capacity-pop=900).
+    assert w.state.population >= 100
+
+    # Re-run with 11h: should decline.
+    w2 = _fresh_world()
+    _inject_tile(w2, type="commercial", x=5, y=5, jobs=1000, housing_capacity=1000)
+    w2.state.population = 100
+    w2.state.yesterday_blackout_hours = 11.0
+    update_population(w2)
+    assert w2.state.happiness < 0.5
+    assert w2.state.population == 99
+
+
+def test_brownout_hours_also_dent_happiness():
+    """Brownout coefficient is lighter than blackout (0.02/h) but still
+    accumulates: 24h brownout drops happiness by 0.48."""
+    w = _fresh_world()
+    _inject_tile(w, type="commercial", x=5, y=5, jobs=1000, housing_capacity=1000)
+    w.state.population = 100
+    w.state.yesterday_brownout_hours = 24.0
+
+    update_population(w)
+    # 1.0 - 0.02 * 24 = 0.52. Still ≥ 0.5 so no decline; verifies the term.
+    assert w.state.happiness == pytest.approx(0.52)
+
+
+def test_zero_blackout_no_pop_decline():
+    """No blackout, jobs/capacity sufficient → pop grows; happiness stays at 1.0."""
+    w = _fresh_world()
+    _inject_tile(w, type="commercial", x=5, y=5, jobs=1000, housing_capacity=1000)
+    w.state.population = 100
+    # Default: yesterday_blackout_hours = yesterday_brownout_hours = 0.
+
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0)
+    assert w.state.population > 100  # growth branch fires
 
 
 # -- Tax revenue -------------------------------------------------------------
@@ -210,6 +285,37 @@ def test_state_dict_exposes_population_and_happiness():
     assert "happiness" in s
     assert s["population"] == 100
     assert s["happiness"] == pytest.approx(1.0)
+
+
+def test_sustained_blackout_declines_population_through_step():
+    """Integration: a world with insufficient generation runs daily blackouts;
+    pop bleeds via the happiness branch within a week. This is the bug from
+    issue 22 — without the fix, pop is invariant under continuous blackouts."""
+    w = World()
+    w.reset(seed=42)
+    # Inject abundant capacity + jobs (so pop doesn't decline via housing or
+    # job branches), and a high baseline pop. NO power plants → every hour
+    # is a blackout.
+    w.state.tiles.append(
+        Tile(
+            id="injected-jobs",
+            type="commercial",
+            x=5,
+            y=5,
+            built_day=0,
+            operational=True,
+            jobs=1000,
+            housing_capacity=1000,
+        )
+    )
+    w.state.population = 200
+    pop_start = w.state.population
+
+    w.step(days=7)
+
+    # 24 blackout hours/day × 7 days. Happiness pinned at 0 → decline branch.
+    assert w.state.population < pop_start
+    assert w.state.happiness < 0.5
 
 
 def test_step_size_invariance_with_population_dynamics():

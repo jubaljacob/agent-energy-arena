@@ -26,6 +26,15 @@ if TYPE_CHECKING:
 
 DAILY_TAX_PER_CAPITA: float = 4.0
 
+# Per-hour outage penalties (issue 22). The brief's daily-aggregate
+# `-0.10 * (yest_blackout_hours / 24)` capped happiness loss at 0.10 even
+# under 24h/day blackouts, leaving population effectively immune. Per-hour
+# coefficients (chosen so 11h+ blackout drops happiness < 0.5 → decline
+# branch fires; 24h brownout drops to 0.52, near but not over the
+# threshold) make the brief's "blackouts cost happiness" wording bite.
+BLACKOUT_HAPPINESS_PER_HOUR: float = 0.05
+BROWNOUT_HAPPINESS_PER_HOUR: float = 0.02
+
 
 def update_population(world: World) -> None:
     state = world.state
@@ -46,7 +55,8 @@ def update_population(world: World) -> None:
 
     happiness = 1.0
     happiness += 0.05 * max(0, park_count - 1)
-    happiness -= 0.10 * (state.yesterday_blackout_hours / 24.0)
+    happiness -= BLACKOUT_HAPPINESS_PER_HOUR * state.yesterday_blackout_hours
+    happiness -= BROWNOUT_HAPPINESS_PER_HOUR * state.yesterday_brownout_hours
     happiness -= 0.05 * coal_houses_within_3 / max(1, house_count)
     happiness = max(0.0, min(1.5, happiness))
 

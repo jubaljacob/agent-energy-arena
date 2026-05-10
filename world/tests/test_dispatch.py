@@ -12,7 +12,6 @@ import pytest
 from world.catalog import TILE_CATALOG
 from world.population import update_population
 from world.power import (
-    BLACKOUT_HAPPINESS_PENALTY,
     COAL_MIN_RUN,
     COAL_RAMP_PER_HOUR,
     GAS_RAMP_PER_HOUR,
@@ -369,31 +368,25 @@ def test_coal_proximity_zero_when_no_houses_in_range() -> None:
     assert w.state.happiness == pytest.approx(1.0)
 
 
-# -- Per-hour happiness penalty (intra-day, before population recompute) ----
+# -- Outage → happiness penalty (issue 22 — applied end-of-day) -------------
 
 
-def test_blackout_drops_happiness_by_0_20_immediately() -> None:
-    """A direct call to dispatch + balance + apply lets us verify §4.4 happiness."""
+def test_full_day_blackout_pins_happiness_at_zero() -> None:
+    """A direct call to dispatch + balance lets us verify the outage detection;
+    one full day of blackout drops happiness to 0 via the daily reassignment
+    in `update_population` (per-hour coef 0.05; 24*0.05 = 1.20 → clip to 0)."""
     w = _fresh_world()
-    # Force a blackout: pop=100, no plants. happiness baseline = 1.0.
     happiness_before = w.state.happiness
+    assert happiness_before == 1.0
     w.state.hour = 0
-    # Run one hour worth of dispatch by hand to observe the intra-day drop.
     from world.power import compute_balance_state, dispatch, total_demand_kw
 
     demand = total_demand_kw(w.state, 0)
     _o, supply, _b = dispatch([], demand, {}, {}, 0, 0)
     state, _s, _e, _r = compute_balance_state(supply, demand)
     assert state == "blackout"
-    # The happiness penalty is applied inside _advance_one_day; verify by
-    # actually calling step and inspecting that the per-hour drops accumulated
-    # before the daily population recompute would have left a much smaller
-    # mark. Cumulative drop after 24 blackout hours would be 24 * 0.20 = 4.8,
-    # clipped to 0. Then population update overwrites with §4.8 baseline.
+
     w.step(days=1)
-    # After step, happiness comes from update_population's recompute, not the
-    # intra-day accumulator. The recompute uses yesterday_blackout_hours=24
-    # → -0.10 * 24/24 = -0.10. So end-of-day happiness ≈ 0.90.
-    assert w.state.happiness == pytest.approx(0.90, abs=0.001)
-    assert BLACKOUT_HAPPINESS_PENALTY == 0.20
-    assert happiness_before == 1.0
+    # 24 blackout hours × 0.05/hr = 1.20 → clipped to 0 by [0, 1.5].
+    assert w.state.happiness == pytest.approx(0.0, abs=0.001)
+    assert w.state.yesterday_blackout_hours == 24.0

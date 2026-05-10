@@ -37,8 +37,6 @@ from world.events import (
 from world.grid import has_road_adjacency, in_bounds
 from world.population import update_population
 from world.power import (
-    BLACKOUT_HAPPINESS_PENALTY,
-    BROWNOUT_HAPPINESS_COEF,
     PLANT_TYPES,
     compute_balance_state,
     dispatch,
@@ -533,19 +531,19 @@ class World:
 
             balance, served_kw, excess_kw, _R = compute_balance_state(supply_kw, demand_kw)
 
-            # Apply hourly happiness penalties (brief §4.4).
+            # Outage bookkeeping. Happiness damage is applied in one shot
+            # at end of day by `update_population` reading
+            # yesterday_blackout_hours / yesterday_brownout_hours; per-hour
+            # decrements here would be clobbered by that reassignment
+            # anyway (issue 22).
             if balance == "blackout":
-                self.state.happiness = max(
-                    0.0, min(1.5, self.state.happiness - BLACKOUT_HAPPINESS_PENALTY)
-                )
                 self.state.treasury -= self.config.blackout_penalty_hour
                 self.state.today_summary_so_far["blackout_hours"] += 1.0
                 self.state.today_summary_so_far["blackout_penalty"] += (
                     self.config.blackout_penalty_hour
                 )
             elif balance == "brownout":
-                penalty = BROWNOUT_HAPPINESS_COEF * (1.0 - _R)
-                self.state.happiness = max(0.0, min(1.5, self.state.happiness - penalty))
+                self.state.today_summary_so_far["brownout_hours"] += 1.0
 
             # Power revenue: civilian served kWh × retail. Process loads
             # (injection wells, refinery) are unbilled per PRD §"Power
@@ -702,8 +700,9 @@ class World:
         if carbon_cost:
             self.state.treasury -= carbon_cost
 
-        # Carry today's blackout-hour count into tomorrow's population update.
+        # Carry today's outage-hour counts into tomorrow's population update.
         self.state.yesterday_blackout_hours = self.state.today_summary_so_far["blackout_hours"]
+        self.state.yesterday_brownout_hours = self.state.today_summary_so_far["brownout_hours"]
 
         # Pin per-hour traces for the UI's "yesterday" chart.
         self.state.last_day_supply_kw_by_hour = supply_trace
