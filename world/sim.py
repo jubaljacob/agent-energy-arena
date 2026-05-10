@@ -30,6 +30,15 @@ from world.power import (
     total_demand_kw,
 )
 from world.state import Tile, WorldState
+from world.subsurface import (
+    SubsurfaceGrid,
+    generate_subsurface,
+    is_size_valid,
+    reservoirs_summary,
+    revealed_voxels,
+    survey_cost,
+)
+from world.subsurface import survey as run_survey
 from world.weather import (
     INITIAL_CLOUD_FACTOR,
     INITIAL_WIND_DIRECTION_DEG,
@@ -75,6 +84,11 @@ class World:
         # Previous hour's per-plant outputs, persisted across hours and days.
         # Keyed by plant id. Used by `dispatch` to enforce ramp limits.
         self._prev_plant_outputs: dict[str, float] = {}
+        self.subsurface: SubsurfaceGrid = SubsurfaceGrid(
+            width=self.config.world_w,
+            height=self.config.world_h,
+            depth=self.config.world_d,
+        )
         self.reset(seed=self.config.world_seed)
 
     # -- Convenience accessors --------------------------------------------
@@ -113,6 +127,16 @@ class World:
         self.state.weather_now["solar_irradiance"] = 0.0
         self._tile_seq = 0
         self._prev_plant_outputs = {}
+        # Subsurface generation consumes sim_rng draws BEFORE any /step is
+        # called. Same-seed reset is therefore byte-reproducible (§3.5
+        # "two /reset calls with the same seed produce byte-identical
+        # voxel grids").
+        self.subsurface = generate_subsurface(
+            self.sim_rng,
+            self.config.world_w,
+            self.config.world_h,
+            self.config.world_d,
+        )
         self._place_town_hall()
 
     def _place_town_hall(self) -> None:
@@ -210,6 +234,46 @@ class World:
             "error": code,
             "treasury_after": self.state.treasury,
             "result": None,
+        }
+
+    # -- Surveys -----------------------------------------------------------
+
+    def survey(self, x: int, y: int, size: int) -> dict[str, Any]:
+        if not is_size_valid(size):
+            return self._build_error("invalid_size")
+        if not in_bounds(x, y, self.config.world_w, self.config.world_h):
+            return self._build_error("out_of_bounds")
+        cost = survey_cost(size)
+        if self.state.treasury < cost:
+            return self._build_error("insufficient_funds")
+
+        self.state.treasury -= cost
+        records = run_survey(
+            self.subsurface,
+            self.sim_rng,
+            x,
+            y,
+            size,
+            self.state.day,
+        )
+        return {
+            "ok": True,
+            "treasury_after": self.state.treasury,
+            "result": {
+                "x": x,
+                "y": y,
+                "size": size,
+                "cost": cost,
+                "voxels": records,
+            },
+        }
+
+    def reservoirs(self, *, min_oil: float = 0.0, top_k: int = 100) -> dict[str, Any]:
+        rows = revealed_voxels(self.subsurface, min_oil=min_oil, top_k=top_k)
+        return {
+            "voxels": rows,
+            "n_returned": len(rows),
+            "filter": {"min_oil": min_oil, "top_k": top_k},
         }
 
     # -- Time advance ------------------------------------------------------
@@ -395,7 +459,7 @@ class World:
             },
             "tiles": [_tile_to_dict(t) for t in s.tiles],
             "wells": [],
-            "reservoirs_revealed": [],
+            "reservoirs_revealed": reservoirs_summary(self.subsurface, top_k=10),
             "active_events": [],
             "weather_now": s.weather_now,
             "power_now": s.power_now,

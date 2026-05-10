@@ -40,6 +40,12 @@ class DemolishBody(BaseModel):
     y: int
 
 
+class SurveyBody(BaseModel):
+    x: int
+    y: int
+    size: int = Field(default=8)
+
+
 def create_app(world: World | None = None, action_log: ActionLog | None = None) -> FastAPI:
     app = FastAPI(title="Energy-AI Nexus", version="0.1.0")
 
@@ -111,6 +117,31 @@ def create_app(world: World | None = None, action_log: ActionLog | None = None) 
             result=result.get("result"),
         )
         return result
+
+    @app.post("/survey")
+    def post_survey(body: SurveyBody) -> dict[str, Any]:
+        params = body.model_dump()
+        result = app.state.world.survey(body.x, body.y, body.size)
+        # Strip the bulky voxel array out of the action log entry; agents that
+        # care can re-read /reservoirs. Keep cost/size/x/y for forensics.
+        log_result: Any = None
+        if result.get("result"):
+            log_result = {k: v for k, v in result["result"].items() if k != "voxels"}
+            log_result["n_voxels"] = len(result["result"].get("voxels", []))
+        app.state.action_log.append(
+            "/survey",
+            params,
+            ok=result["ok"],
+            error=result.get("error"),
+            result=log_result,
+        )
+        return result
+
+    @app.get("/reservoirs")
+    def get_reservoirs(min_oil: float = 0.0, top_k: int = 100) -> dict[str, Any]:
+        if top_k < 1 or top_k > 4096:
+            raise HTTPException(status_code=400, detail="top_k must be in [1, 4096]")
+        return app.state.world.reservoirs(min_oil=min_oil, top_k=top_k)
 
     @app.post("/demolish")
     def post_demolish(body: DemolishBody) -> dict[str, Any]:

@@ -266,10 +266,14 @@
   const tabButtons = document.querySelectorAll(".tab");
   const tabPanels = document.querySelectorAll(".tabpanel");
   for (const btn of tabButtons) {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       const target = btn.dataset.tab;
       for (const b of tabButtons) b.classList.toggle("active", b === btn);
       for (const p of tabPanels) p.classList.toggle("active", p.id === `tab-${target}`);
+      if (target === "subsurface") {
+        await refreshRevealed();
+        renderSubsurface();
+      }
     });
   }
 
@@ -349,6 +353,111 @@
     }
   }
 
+  // Subsurface tab rendering -------------------------------------------
+  const subAxisEl = document.getElementById("sub-axis");
+  const subSliceEl = document.getElementById("sub-slice");
+  const subChartEl = document.getElementById("subchart");
+  const subStatsEl = document.getElementById("sub-stats");
+
+  let worldDims = { w: 32, h: 32, d: 16 };
+  let revealedVoxels = [];
+
+  function maxOilForColorScale() {
+    let m = 0;
+    for (const v of revealedVoxels) {
+      if (v.oil_estimate_bbl > m) m = v.oil_estimate_bbl;
+    }
+    return m || 1;
+  }
+
+  function oilColor(value, maxValue) {
+    const t = Math.min(1, Math.max(0, value / maxValue));
+    // Cool → warm gradient: dark teal (#2a3a4d) → yellow (#f5d76e).
+    const r = Math.round(0x2a + t * (0xf5 - 0x2a));
+    const g = Math.round(0x3a + t * (0xd7 - 0x3a));
+    const b = Math.round(0x4d + t * (0x6e - 0x4d));
+    return `rgb(${r},${g},${b})`;
+  }
+
+  async function refreshRevealed() {
+    try {
+      const res = await fetch("/reservoirs?min_oil=0&top_k=4096");
+      if (!res.ok) return;
+      const body = await res.json();
+      revealedVoxels = body.voxels || [];
+    } catch (err) {
+      // best-effort; subsurface tab keeps prior data
+    }
+  }
+
+  function renderSubsurface() {
+    if (!subChartEl) return;
+    subChartEl.innerHTML = "";
+    const axis = subAxisEl.value || "y";
+    let slice = parseInt(subSliceEl.value, 10);
+    if (isNaN(slice)) slice = 16;
+    const W = 640;
+    const H = 320;
+    // Cross-section dims: (lateral × depth)
+    const lateralN = axis === "y" ? worldDims.w : worldDims.h;
+    const depthN = worldDims.d;
+    const cw = W / lateralN;
+    const ch = H / depthN;
+
+    // Outline grid for unrevealed voxels.
+    const gridG = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    gridG.setAttribute("stroke", "#2f323a");
+    gridG.setAttribute("fill", "transparent");
+    gridG.setAttribute("stroke-width", "0.5");
+    for (let i = 0; i < lateralN; i++) {
+      for (let z = 0; z < depthN; z++) {
+        const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        r.setAttribute("x", (i * cw).toFixed(2));
+        r.setAttribute("y", (z * ch).toFixed(2));
+        r.setAttribute("width", cw.toFixed(2));
+        r.setAttribute("height", ch.toFixed(2));
+        gridG.appendChild(r);
+      }
+    }
+    subChartEl.appendChild(gridG);
+
+    const maxOil = maxOilForColorScale();
+    const onSlice = revealedVoxels.filter((v) =>
+      axis === "y" ? v.y === slice : v.x === slice
+    );
+    const filledG = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    for (const v of onSlice) {
+      const lateral = axis === "y" ? v.x : v.y;
+      const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      r.setAttribute("x", (lateral * cw).toFixed(2));
+      r.setAttribute("y", (v.z * ch).toFixed(2));
+      r.setAttribute("width", cw.toFixed(2));
+      r.setAttribute("height", ch.toFixed(2));
+      r.setAttribute("fill", oilColor(v.oil_estimate_bbl, maxOil));
+      r.setAttribute("stroke", "#1a1c22");
+      r.setAttribute("stroke-width", "0.5");
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = `(${v.x}, ${v.y}, ${v.z}) — ${Math.round(v.oil_estimate_bbl).toLocaleString()} bbl, ${Math.round(v.perm_estimate_md)} mD`;
+      r.appendChild(title);
+      filledG.appendChild(r);
+    }
+    subChartEl.appendChild(filledG);
+
+    // Axes labels.
+    const axisLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    axisLabel.setAttribute("x", "4");
+    axisLabel.setAttribute("y", "14");
+    axisLabel.setAttribute("fill", "#8b8f9a");
+    axisLabel.setAttribute("font-size", "11");
+    axisLabel.textContent = `axis=${axis}, slice=${slice}, depth↓ ${axis === "y" ? "x→" : "y→"}`;
+    subChartEl.appendChild(axisLabel);
+
+    subStatsEl.textContent = `${revealedVoxels.length} revealed voxels · max est. ${Math.round(maxOil).toLocaleString()} bbl · ${onSlice.length} on this slice`;
+  }
+
+  if (subAxisEl) subAxisEl.addEventListener("change", renderSubsurface);
+  if (subSliceEl) subSliceEl.addEventListener("input", renderSubsurface);
+
   async function tick() {
     try {
       const res = await fetch("/state");
@@ -356,6 +465,11 @@
       const s = await res.json();
       cols = s.config.world_w;
       rows = s.config.world_h;
+      worldDims = { w: s.config.world_w, h: s.config.world_h, d: s.config.world_d };
+      if (subSliceEl && !subSliceEl.dataset.bounded) {
+        subSliceEl.max = String(Math.max(0, worldDims.w - 1));
+        subSliceEl.dataset.bounded = "1";
+      }
       tiles = s.tiles || [];
       treasury = s.treasury;
       els.day.textContent = s.day;
@@ -368,6 +482,12 @@
       renderPowerChart(s.last_day_supply_kw_by_hour, s.last_day_demand_kw_by_hour);
       renderPlantList(tiles);
       drawGrid();
+      // Refresh revealed voxels lazily when the subsurface tab is visible.
+      const subPanel = document.getElementById("tab-subsurface");
+      if (subPanel && subPanel.classList.contains("active")) {
+        await refreshRevealed();
+        renderSubsurface();
+      }
     } catch (err) {
       // Server may not be up yet during boot — keep polling.
     }

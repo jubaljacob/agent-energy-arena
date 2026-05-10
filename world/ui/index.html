@@ -17,6 +17,7 @@
   <nav id="tabs">
     <button class="tab active" data-tab="map">Map</button>
     <button class="tab" data-tab="power">Power</button>
+    <button class="tab" data-tab="subsurface">Subsurface</button>
   </nav>
   <main>
     <section id="tab-map" class="tabpanel active">
@@ -28,6 +29,39 @@
       <div id="canvasrow">
         <canvas id="grid" width="640" height="640"></canvas>
         <div id="toast" class="toast"></div>
+      </div>
+    </section>
+    <section id="tab-subsurface" class="tabpanel">
+      <div id="subwrap">
+        <div id="subcontrols">
+          <label>Axis
+            <select id="sub-axis">
+              <option value="x">X (slice fixes x)</option>
+              <option value="y" selected>Y (slice fixes y)</option>
+            </select>
+          </label>
+          <label>Slice
+            <input id="sub-slice" type="number" min="0" max="31" value="16" />
+          </label>
+          <div id="sub-stats" class="sub-stats">—</div>
+        </div>
+        <div id="subview">
+          <svg id="subchart" viewBox="0 0 640 320" preserveAspectRatio="xMidYMid meet"></svg>
+        </div>
+        <div id="sublegend">
+          <span class="legend-item">
+            <span class="legend-swatch sub-revealed-swatch"></span>
+            Revealed (color = oil estimate)
+          </span>
+          <span class="legend-item">
+            <span class="legend-swatch sub-unrevealed-swatch"></span>
+            Unrevealed (outline)
+          </span>
+        </div>
+        <p class="sub-hint">
+          Survey columns from <code>POST /survey</code> to reveal voxels at
+          all depths. Resurveys add independent noise samples.
+        </p>
       </div>
     </section>
     <section id="tab-power" class="tabpanel">

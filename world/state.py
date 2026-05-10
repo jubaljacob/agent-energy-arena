@@ -46,7 +46,6 @@ class WorldState:
     happiness: float = 1.0
     tiles: list[Tile] = field(default_factory=list)
     wells: list[Well] = field(default_factory=list)
-    reservoirs_revealed: list[dict[str, Any]] = field(default_factory=list)
     active_events: list[dict[str, Any]] = field(default_factory=list)
 
     # Blackout hours from the previous simulated day. Drives the happiness
