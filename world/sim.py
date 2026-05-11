@@ -34,7 +34,7 @@ from world.events import (
     fuel_price_shock_multiplier,
     sample_and_apply_events,
 )
-from world.grid import has_road_adjacency, in_bounds
+from world.grid import has_road_adjacency, in_bounds, road_connected_set
 from world.population import update_population
 from world.power import (
     PLANT_TYPES,
@@ -256,6 +256,16 @@ class World:
         if tile.type == "town_hall":
             return self._build_error("cannot_demolish_townhall")
 
+        if tile.type == "road":
+            stranded = self._roads_stranded_if_removed(tile)
+            if stranded:
+                return {
+                    "ok": False,
+                    "error": "would_disconnect",
+                    "treasury_after": self.state.treasury,
+                    "result": {"stranded": stranded},
+                }
+
         refund = 0.25 * tile.capex_paid
         self.state.treasury += refund
         self.state.tiles.remove(tile)
@@ -270,6 +280,21 @@ class World:
                 "refund": refund,
             },
         }
+
+    def _roads_stranded_if_removed(self, target: Tile) -> list[dict[str, Any]]:
+        remaining = [t for t in self.state.tiles if t is not target]
+        new_network = road_connected_set(remaining, self.config.world_w, self.config.world_h)
+        stranded: list[dict[str, Any]] = []
+        for t in remaining:
+            spec = TILE_CATALOG.get(t.type)
+            if spec is None or not spec.requires_road:
+                continue
+            has_neighbor = any(
+                (t.x + dx, t.y + dy) in new_network for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+            )
+            if not has_neighbor:
+                stranded.append({"x": t.x, "y": t.y, "type": t.type})
+        return stranded
 
     def _tile_at(self, x: int, y: int) -> Tile | None:
         for t in self.state.tiles:
