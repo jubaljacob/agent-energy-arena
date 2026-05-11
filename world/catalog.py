@@ -178,6 +178,16 @@ def _spec_to_dict(spec: TileSpec) -> dict[str, Any]:
 
 
 def build_catalog() -> dict[str, Any]:
+    from world.subsurface import (
+        CRUDE_PRICE_USD_PER_BBL,
+        INJECTION_KWH_PER_BBL,
+        Q_MAX_WELL_BBL_DAY,
+        SEISMIC_BASE_COST,
+        SEISMIC_DEFAULT_SIZE,
+        SEISMIC_MAX_SIZE,
+        SEISMIC_MIN_SIZE,
+    )
+
     tiles: list[dict[str, Any]] = []
     wells: list[dict[str, Any]] = []
     for spec in TILE_CATALOG.values():
@@ -186,7 +196,33 @@ def build_catalog() -> dict[str, Any]:
             wells.append(entry)
         else:
             tiles.append(entry)
-    return {"tiles": tiles, "wells": wells}
+    oil_well = TILE_CATALOG["oil_well"]
+    injection_well = TILE_CATALOG["injection_well"]
+    subsurface = {
+        "survey": {
+            "base_cost": SEISMIC_BASE_COST,
+            "base_size": SEISMIC_DEFAULT_SIZE,
+            "min_size": SEISMIC_MIN_SIZE,
+            "max_size": SEISMIC_MAX_SIZE,
+            "cost_formula": "base_cost * (size / base_size) ** 2",
+            "default_size": SEISMIC_DEFAULT_SIZE,
+        },
+        "drill": {
+            "production": {
+                "capex": oil_well.capex,
+                "opex_per_day": oil_well.opex_per_day,
+                "max_rate_bbl_day": Q_MAX_WELL_BBL_DAY,
+                "crude_price_usd_per_bbl": CRUDE_PRICE_USD_PER_BBL,
+            },
+            "injection": {
+                "capex": injection_well.capex,
+                "opex_per_day": injection_well.opex_per_day,
+                "max_rate_bbl_day": Q_MAX_WELL_BBL_DAY,
+                "kwh_per_bbl": INJECTION_KWH_PER_BBL,
+            },
+        },
+    }
+    return {"tiles": tiles, "wells": wells, "subsurface": subsurface}
 
 
 def is_buildable(tile_type: str) -> bool:

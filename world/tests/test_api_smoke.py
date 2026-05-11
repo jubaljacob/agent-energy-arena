@@ -96,6 +96,29 @@ def test_step_failure_is_logged(tmp_path: Path) -> None:
     # body is accepted — see test_world_step_failure_logged.
 
 
+def test_post_survey_size_field_is_optional_and_defaults_to_eight(tmp_path: Path) -> None:
+    """Issue 21: `size` is optional on POST /survey; the server uses
+    SEISMIC_DEFAULT_SIZE when it's omitted. The voxel count must match
+    an explicit `{size: 8}` request when called from a fresh world at
+    the same anchor."""
+    client_a, _ = _client(tmp_path / "a")
+    client_b, _ = _client(tmp_path / "b")
+    client_a.post("/reset", json={"seed": 42})
+    client_b.post("/reset", json={"seed": 42})
+
+    r_default = client_a.post("/survey", json={"x": 16, "y": 16})
+    r_explicit = client_b.post("/survey", json={"x": 16, "y": 16, "size": 8})
+    assert r_default.status_code == 200
+    assert r_explicit.status_code == 200
+    body_default = r_default.json()
+    body_explicit = r_explicit.json()
+    assert body_default["ok"] is True
+    assert body_explicit["ok"] is True
+    assert body_default["result"]["size"] == 8
+    assert body_default["result"]["cost"] == body_explicit["result"]["cost"]
+    assert len(body_default["result"]["voxels"]) == len(body_explicit["result"]["voxels"])
+
+
 def test_world_step_failure_logged(tmp_path: Path) -> None:
     """If the world rejects a step that passed body validation, the rejection
     must still be appended to the action log."""

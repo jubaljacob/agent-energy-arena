@@ -39,6 +39,7 @@ class ApiClient:
             import httpx
 
             self._client = httpx.Client(base_url=base_url, timeout=120.0)
+        self._catalog_cache: dict[str, Any] | None = None
 
     # -- Read endpoints ---------------------------------------------------
 
@@ -49,7 +50,21 @@ class ApiClient:
         return self._get("/seed")
 
     def catalog(self) -> dict[str, Any]:
-        return self._get("/catalog")
+        if self._catalog_cache is None:
+            self._catalog_cache = self._get("/catalog")
+        return self._catalog_cache
+
+    def survey_cost_preview(self, size: int) -> float:
+        """Quadratic survey cost derived from the cached /catalog response.
+
+        Mirrors `world.subsurface.survey_cost(size)` so UI hover and agent
+        planning agree on the cost without re-reading the brief. Issues at
+        most one GET /catalog (cached for the lifetime of the client).
+        """
+        survey = self.catalog()["subsurface"]["survey"]
+        base_cost = float(survey["base_cost"])
+        base_size = float(survey["base_size"])
+        return base_cost * (size / base_size) ** 2
 
     def events(self) -> dict[str, Any]:
         return self._get("/events")
