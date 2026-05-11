@@ -624,3 +624,137 @@ Blockers / notes for next iteration:
   hover-cost rendering in `world/ui/app.js:43+` can now read
   `catalog.subsurface` directly — no schema work blocks the UI
   slice.
+
+## Progress note (HITL pass 2 — UI portion)
+
+UI portion landed. The left rail now carries a **Subsurface tools**
+palette beneath the build palette with two mode buttons (Survey,
+Drill) wired into a unified mode state machine in `world/ui/app.js`.
+Survey has a size input that clamps to `[4, 16]` and a live cost
+preview computed from `catalog.subsurface.survey` (no HTTP roundtrip
+per hover — `/catalog` is cached on `ApiClient` but the UI uses a
+plain `loadCatalog()` that runs once at boot). Drill has a
+production/injection radio.
+
+Map canvas (`world/ui/app.js`):
+- Hover in Survey mode renders the **clipped** N×N footprint via a
+  JS port of `world.subsurface._column_bounds`. Affordability tint
+  switches yellow → red when `treasury < cost`. Already-explored
+  cells inside the footprint get an extra crossed-line overlay so
+  resurveys are visible.
+- Hover tooltip (via `canvas.title`) reads
+  `survey @ (x, y) size=N · cost $C · NN cells` or
+  `resurvey · cost $C · NN cells (M previously surveyed)` when any
+  cell in the footprint is already in the explored set.
+- Click in Survey mode short-circuits client-side if
+  `treasury < cost` with an `insufficient_funds` toast; otherwise
+  POSTs `/survey {x, y, size}`. Success toast is a **bridge**
+  affordance (yellow + underlined + clickable) that activates the
+  Subsurface tab and snaps `subAxisEl.value = "y"` +
+  `subSliceEl.value = y`.
+- Drill mode renders a coloured crosshair on the **locked anchor**
+  tile (not at hover): red if tile/well occupies it, yellow if the
+  dry-hole pool check fails, orange otherwise. Hovering anywhere on
+  the canvas just shows a tooltip describing the locked target.
+- Click in Drill mode fires `/drill { x, y, target_z, well_type }`
+  using the anchor coords; the hover position is ignored
+  (defence: the issue's "click the canvas to fire" is interpreted
+  as "anywhere — the anchor is already committed"). Occupied
+  → short-circuit toast. Dry-hole → confirm modal with the wording
+  from the issue, including `$C CAPEX at risk` derived from
+  `catalog.subsurface.drill[type].capex`. Cancel leaves the anchor
+  intact; Confirm fires drill; success clears the anchor.
+- Explored-columns hatching renders in every mode (faint yellow
+  diagonals over each `(x, y)` that appears in the cached
+  `/reservoirs` voxel list). Empty-but-surveyed columns won't
+  appear in the overlay because `/reservoirs` only carries HC
+  voxels — acceptable for a hover hint; the server is the source
+  of truth.
+
+Subsurface tab (`renderSubsurface`):
+- Each revealed voxel rect gets a `drill-pickable` class when
+  `mode === "drill"`. Clicking sets `drillAnchor = {x, y, target_z}`,
+  highlights the rect with a yellow stroke, surfaces a "selected
+  target" status line, and refreshes the map canvas so the locked
+  yellow outline appears immediately (even while the user is still
+  on the Subsurface tab).
+- Existing wells render as ▼ (production, green) / ▲ (injection,
+  blue) text markers on the cross-section whenever their off-axis
+  coord matches the current slice. Markers carry a `<title>`
+  tooltip `well_id · type · (x, y, target_z) · setpoint NN bbl/d`.
+- The status line under the chart reads `selected target: (x, y, z)
+  — click surface on the Map tab to drill` once a voxel is picked,
+  and clears when the anchor is released.
+
+Keyboard / cancel story:
+- **Escape** clears any active mode (build/survey/drill) and
+  dismisses the confirm modal. Ignored when typing in an input.
+- **Right-click** while in survey/drill mode cancels the mode and
+  does NOT fall through to `/demolish`. With no subsurface mode
+  active, right-click keeps its existing demolish semantics
+  (issue 20's connectivity guard still applies).
+- Mutual exclusivity: selecting a build tile auto-deactivates
+  survey/drill; selecting Survey or Drill clears `selectedType`.
+- Canvas cursor switches to `crosshair` only when a subsurface
+  mode is active.
+- `#buildhint` paragraph rewrites itself with the mode-specific
+  prompt (matches the "Global mode indicator" section of the spec).
+
+HTML/CSS:
+- `world/ui/index.html`: new `<ul id="sublist">` with `mode-survey`
+  and `mode-drill` `<li>`s, plus the confirm-modal scaffolding
+  (`#modal`, `#modal-cancel`, `#modal-confirm`) inside `#canvasrow`
+  (which already has `position: relative`). The Subsurface tab
+  `.sub-hint` paragraph now documents the Survey → Drill flow and
+  the ▼/▲ legend; a new `<p id="sub-target">` carries the
+  "selected target" status line.
+- `world/ui/style.css`: appended `.modeItem`, `.sub-survey-swatch`,
+  `.sub-drill-swatch`, `.modal-backdrop`, `.modal`, `.modal-actions`,
+  `.drill-pickable`, `.drill-picked`, `.sub-target`, `.toast.ok-bridge`
+  styles. Crosshair cursor toggle via `canvas.classList`.
+
+Backend (re)verified end-to-end via curl: fresh `/reset` → cluster
+of `/survey` calls at (4,4) … (28,28) reveals 70 HC voxels across
+1024 columns; `/reservoirs?top_k=10` picks the first; `/drill` at
+that voxel succeeds with the expected `production-1` envelope and
+$50k CAPEX. The UI mirrors this exact flow.
+
+Verification:
+- `node -e "new Function(fs.readFileSync('world/ui/app.js'))"` parses
+  cleanly (syntax sanity).
+- `make check` exits clean: 0 ruff findings, 49 files mypy-clean,
+  408 pytest passing — no backend regression.
+- Headless E2E (Playwright/Puppeteer) was not run since the repo
+  has no JS test harness today. Manual browser verification of the
+  full Survey → Subsurface tab → Drill → Wells tab flow is the
+  remaining sign-off.
+
+Blockers / notes for next iteration:
+- The toast bridge uses `toastEl.onclick = handler` and resets to
+  `null` on click or auto-hide. If a future polish adds keyboard-
+  accessible toasts, swap to an explicit anchor inside the toast
+  body so screen readers see "click to open Subsurface tab" as a
+  focusable target.
+- Dry-hole pool check reads from the cached `/reservoirs` payload
+  refreshed on every `tick()` (only when the Subsurface tab is
+  active) or after a survey. If the user picks a voxel, surveys a
+  neighbouring column that fills the previously-empty pool, and
+  immediately clicks to drill without the Subsurface tab being
+  open, the pool check could miss the new HC. Mitigation: the
+  modal is a soft gate — Confirm fires the drill regardless. The
+  defence-in-depth nature of the client-side check makes a stale
+  pool tolerable.
+- Issue 16's action-ticker hook isn't wired here. The spec's
+  "Action-ticker coordination" line said "append-if-present" — the
+  Survey/Drill paths don't try to find a ticker container today.
+  When 16 lands, add the append call inside `handleSurveyClick`
+  and `fireDrill` next to the `tick()` call.
+- The explored-columns hatching derives from `/reservoirs` (HC
+  voxels only). A future polish slice could add an `explored_
+  columns: [[x, y], ...]` field to `/reservoirs` (or
+  `/state.reservoirs_revealed`) so empty-but-paid-for columns
+  also light up. Strictly additive, no breaking change.
+- The voxel-pick → drill flow uses `drillAnchor` shared across
+  tabs. If the user toggles into another mode mid-pick, the
+  anchor clears (see `setMode`). That's intentional but worth a
+  note: there's no "remember last pick" affordance.

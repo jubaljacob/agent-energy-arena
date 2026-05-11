@@ -26,11 +26,47 @@
       <aside id="buildmenu">
         <h2>Build</h2>
         <ul id="buildlist"></ul>
+        <h2 class="palette-sep">Subsurface tools</h2>
+        <ul id="sublist">
+          <li id="mode-survey" class="modeItem" data-mode="survey">
+            <span class="swatch sub-survey-swatch"></span>
+            <div class="bi-text">
+              <div class="bi-name">Survey</div>
+              <div class="bi-desc">Click canvas to reveal an N×N column. Right-click cancels.</div>
+              <div class="bi-cost">
+                size
+                <input id="survey-size" type="number" min="4" max="16" value="8" />
+                · <span id="survey-cost-preview">$15,000</span>
+              </div>
+            </div>
+          </li>
+          <li id="mode-drill" class="modeItem" data-mode="drill">
+            <span class="swatch sub-drill-swatch"></span>
+            <div class="bi-text">
+              <div class="bi-name">Drill</div>
+              <div class="bi-desc">Pick voxel in Subsurface tab, then click canvas.</div>
+              <div class="bi-cost">
+                <label><input type="radio" name="drill-type" value="production" checked /> production</label>
+                <label><input type="radio" name="drill-type" value="injection" /> injection</label>
+              </div>
+            </div>
+          </li>
+        </ul>
         <p id="buildhint">Click a tile type, then click the grid. Right-click a tile to demolish.</p>
       </aside>
       <div id="canvasrow">
         <canvas id="grid" width="640" height="640"></canvas>
         <div id="toast" class="toast"></div>
+        <div id="modal" class="modal-backdrop hidden">
+          <div class="modal">
+            <h3 id="modal-title">Drill possibly-empty rock?</h3>
+            <p id="modal-body"></p>
+            <div class="modal-actions">
+              <button id="modal-cancel">Cancel</button>
+              <button id="modal-confirm" class="primary">Drill anyway</button>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
     <section id="tab-subsurface" class="tabpanel">
@@ -61,9 +97,13 @@
           </span>
         </div>
         <p class="sub-hint">
-          Survey columns from <code>POST /survey</code> to reveal voxels at
-          all depths. Resurveys add independent noise samples.
+          Survey → Drill flow: pick <b>Survey</b> in the left rail, click the map to
+          reveal an N×N column at all depths. Then pick <b>Drill</b>, click a revealed
+          voxel here to lock its <code>(x, y, target_z)</code>, and click the same
+          surface tile on the Map tab to fire <code>POST /drill</code>. Resurveys add
+          independent noise samples. ▼ = production well, ▲ = injection well.
         </p>
+        <p id="sub-target" class="sub-hint sub-target hidden"></p>
       </div>
     </section>
     <section id="tab-wells" class="tabpanel">

@@ -4,6 +4,18 @@
   const buildList = document.getElementById("buildlist");
   const toastEl = document.getElementById("toast");
   const nextDayBtn = document.getElementById("next-day");
+  const buildHint = document.getElementById("buildhint");
+  const subSurveyBtn = document.getElementById("mode-survey");
+  const subDrillBtn = document.getElementById("mode-drill");
+  const surveySizeInput = document.getElementById("survey-size");
+  const surveyCostEl = document.getElementById("survey-cost-preview");
+  const modal = document.getElementById("modal");
+  const modalBody = document.getElementById("modal-body");
+  const modalCancel = document.getElementById("modal-cancel");
+  const modalConfirm = document.getElementById("modal-confirm");
+  const subTargetEl = document.getElementById("sub-target");
+  const drillTypeRadios = () =>
+    document.querySelectorAll('input[name="drill-type"]');
 
   const els = {
     day: document.getElementById("day"),
@@ -38,9 +50,22 @@
   let historicalEvents = [];
   let summary = {};
   let treasury = 0;
-  let catalog = null;
+  let catalog = null;       // map of tile_type -> tile spec (buildable only)
+  let catalogRaw = null;    // full /catalog payload (incl. subsurface block)
   let selectedType = null;
   let hoverCell = null;
+
+  // Mode state: "build" (legacy selectedType drives detail), "survey",
+  // "drill", or null. Only one mode is active at a time; selecting a build
+  // tile, the Survey button, or the Drill button deactivates the others.
+  let mode = null;
+  let surveySize = 8;
+  let drillWellType = "production";
+  // Locked drill anchor (picked via voxel-click in the Subsurface tab).
+  // null until the user picks a voxel. Survives slice-selector changes.
+  let drillAnchor = null;
+  // Pending modal action — populated when the dry-hole modal is open.
+  let pendingDrill = null;
 
   const REFINERY_YIELD = 0.85;
   const REFINERY_MAX_BBL_DAY = 500;
@@ -93,15 +118,95 @@
       ctx.stroke();
     }
 
-    if (selectedType && hoverCell) {
+    if (selectedType && mode === "build" && hoverCell) {
       const valid = isPlacementValid(hoverCell.x, hoverCell.y, selectedType);
       ctx.fillStyle = valid ? "rgba(63,191,127,0.35)" : "rgba(255,80,80,0.35)";
       ctx.fillRect(hoverCell.x * cw, hoverCell.y * ch, cw, ch);
+    }
+
+    // Issue 21: explored-columns hatching (visible in all modes).
+    const explored = exploredColumnsSet();
+    if (explored.size > 0) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(245,215,110,0.18)";
+      ctx.lineWidth = 1;
+      for (const key of explored) {
+        const [ex, ey] = key.split(",").map(Number);
+        if (tileAt(ex, ey)) continue; // tiles already render their own swatch
+        // Diagonal hatch: two thin lines per cell.
+        const x0 = ex * cw;
+        const y0 = ey * ch;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0 + ch * 0.3);
+        ctx.lineTo(x0 + cw * 0.7, y0 + ch);
+        ctx.moveTo(x0 + cw * 0.3, y0);
+        ctx.lineTo(x0 + cw, y0 + ch * 0.7);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Survey mode: clipped N×N footprint + affordability tint.
+    if (mode === "survey" && hoverCell) {
+      const [x0, y0, x1, y1] = columnBounds(hoverCell.x, hoverCell.y, surveySize, cols, rows);
+      const cost = surveyCost(surveySize) || 0;
+      const affordable = treasury >= cost;
+      ctx.save();
+      ctx.fillStyle = affordable ? "rgba(245,215,110,0.22)" : "rgba(255,80,80,0.28)";
+      ctx.fillRect(x0 * cw, y0 * ch, (x1 - x0) * cw, (y1 - y0) * ch);
+      ctx.strokeStyle = affordable ? "rgba(245,215,110,0.7)" : "rgba(255,80,80,0.85)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x0 * cw, y0 * ch, (x1 - x0) * cw, (y1 - y0) * ch);
+      // Resurvey overlay: cells already in explored set get a darker hatch.
+      ctx.strokeStyle = "rgba(245,215,110,0.55)";
+      ctx.lineWidth = 1;
+      for (let yy = y0; yy < y1; yy++) {
+        for (let xx = x0; xx < x1; xx++) {
+          if (!explored.has(`${xx},${yy}`)) continue;
+          const px = xx * cw;
+          const py = yy * ch;
+          ctx.beginPath();
+          ctx.moveTo(px, py);
+          ctx.lineTo(px + cw, py + ch);
+          ctx.moveTo(px + cw, py);
+          ctx.lineTo(px, py + ch);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
+    // Drill mode: crosshair on the locked anchor; color encodes guard state.
+    if (mode === "drill" && drillAnchor) {
+      const occupied = !!tileAt(drillAnchor.x, drillAnchor.y) || !!wellAt(drillAnchor.x, drillAnchor.y);
+      const dryHole = !poolHasHc(drillAnchor.x, drillAnchor.y, drillAnchor.target_z);
+      let color;
+      if (occupied) color = "#ff5050";
+      else if (dryHole) color = "#f5d76e";
+      else color = "#ff7a59";
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      const cx = drillAnchor.x * cw + cw / 2;
+      const cy = drillAnchor.y * ch + ch / 2;
+      const r = Math.min(cw, ch) * 0.4;
+      ctx.beginPath();
+      ctx.moveTo(cx - r, cy);
+      ctx.lineTo(cx + r, cy);
+      ctx.moveTo(cx, cy - r);
+      ctx.lineTo(cx, cy + r);
+      ctx.stroke();
+      ctx.strokeRect(drillAnchor.x * cw + 0.5, drillAnchor.y * ch + 0.5, cw - 1, ch - 1);
+      ctx.restore();
     }
   }
 
   function tileAt(x, y) {
     return tiles.find((t) => t.x === x && t.y === y) || null;
+  }
+
+  function wellAt(x, y) {
+    return wells.find((w) => w.x === x && w.y === y) || null;
   }
 
   function roadNetwork() {
@@ -149,13 +254,112 @@
     try {
       const res = await fetch("/catalog");
       const data = await res.json();
+      catalogRaw = data;
       catalog = {};
       for (const entry of data.tiles) {
         if (entry.buildable) catalog[entry.tile_type] = entry;
       }
       renderBuildMenu();
+      updateSurveyCostPreview();
     } catch (err) {
       console.error("catalog load failed", err);
+    }
+  }
+
+  // Mirrors world.subsurface._column_bounds(x, y, size, world_w, world_h).
+  // Returns inclusive-exclusive [x0, x1) × [y0, y1) range clipped to grid.
+  function columnBounds(x, y, size, w, h) {
+    const half = Math.floor(size / 2);
+    return [
+      Math.max(0, x - half),
+      Math.max(0, y - half),
+      Math.min(w, x - half + size),
+      Math.min(h, y - half + size),
+    ];
+  }
+
+  // base_cost * (size / base_size)**2 — matches world.subsurface.survey_cost.
+  // Returns null until /catalog has loaded.
+  function surveyCost(size) {
+    if (!catalogRaw || !catalogRaw.subsurface) return null;
+    const s = catalogRaw.subsurface.survey;
+    return s.base_cost * Math.pow(size / s.base_size, 2);
+  }
+
+  function drillCapex(wellType) {
+    if (!catalogRaw || !catalogRaw.subsurface) return 0;
+    return catalogRaw.subsurface.drill[wellType].capex;
+  }
+
+  function clampSurveySize(raw) {
+    let n = parseInt(raw, 10);
+    if (isNaN(n)) return surveySize;
+    const s = catalogRaw && catalogRaw.subsurface ? catalogRaw.subsurface.survey : { min_size: 4, max_size: 16 };
+    if (n < s.min_size) n = s.min_size;
+    if (n > s.max_size) n = s.max_size;
+    return n;
+  }
+
+  function updateSurveyCostPreview() {
+    if (!surveyCostEl) return;
+    const c = surveyCost(surveySize);
+    surveyCostEl.textContent = c == null ? "—" : `$${Math.round(c).toLocaleString()}`;
+  }
+
+  // Set of "x,y" keys for columns that have at least one revealed voxel.
+  // Mirrors `subsurface.explored_columns` for HC-bearing columns; truly
+  // empty surveyed columns are not in /reservoirs so the overlay won't mark
+  // them — acceptable for a hover hint (server is the source of truth).
+  function exploredColumnsSet() {
+    const s = new Set();
+    for (const v of revealedVoxels) s.add(`${v.x},${v.y}`);
+    return s;
+  }
+
+  // Dry-hole guard: returns true iff no known HC voxel sits within ±1 of
+  // (x, y, target_z). Uses the /reservoirs?top_k=4096 payload that the
+  // Subsurface tab already polls.
+  function poolHasHc(x, y, z) {
+    for (const v of revealedVoxels) {
+      if (Math.abs(v.x - x) <= 1 && Math.abs(v.y - y) <= 1 && Math.abs(v.z - z) <= 1) {
+        if (v.oil_estimate_bbl > 0) return true;
+      }
+    }
+    return false;
+  }
+
+  function setMode(next) {
+    mode = next;
+    if (next !== "build") {
+      selectedType = null;
+      for (const node of buildList.children) node.classList.remove("selected");
+    }
+    if (next !== "drill") {
+      drillAnchor = null;
+      renderSubsurface();
+    }
+    subSurveyBtn.classList.toggle("selected", next === "survey");
+    subDrillBtn.classList.toggle("selected", next === "drill");
+    canvas.classList.toggle("crosshair", next === "survey" || next === "drill");
+    refreshBuildHint();
+    drawGrid();
+  }
+
+  function refreshBuildHint() {
+    if (!buildHint) return;
+    if (mode === "survey") {
+      buildHint.textContent =
+        "Survey mode — click canvas to anchor. Right-click or Esc to cancel.";
+    } else if (mode === "drill") {
+      const target = drillAnchor
+        ? ` Locked at (${drillAnchor.x}, ${drillAnchor.y}, z=${drillAnchor.target_z}).`
+        : "";
+      buildHint.textContent =
+        `Drill mode — pick a voxel in the Subsurface tab, then click the canvas.${target} Right-click or Esc to cancel.`;
+    } else if (mode === "build" && selectedType) {
+      buildHint.textContent = `Build mode — click a grid cell to place ${selectedType}. Right-click to demolish.`;
+    } else {
+      buildHint.textContent = "Click a tile type, then click the grid. Right-click a tile to demolish.";
     }
   }
 
@@ -190,10 +394,11 @@
         </div>
       `;
       li.addEventListener("click", () => {
-        selectedType = selectedType === tt ? null : tt;
+        const turningOff = selectedType === tt;
+        selectedType = turningOff ? null : tt;
         for (const node of buildList.children) node.classList.remove("selected");
         if (selectedType) li.classList.add("selected");
-        drawGrid();
+        setMode(selectedType ? "build" : null);
       });
       buildList.appendChild(li);
     }
@@ -209,21 +414,127 @@
     };
   }
 
+  // Subsurface tool palette wiring.
+  if (subSurveyBtn) {
+    subSurveyBtn.addEventListener("click", (ev) => {
+      // Clicking the size input should not toggle the mode.
+      if (ev.target.tagName === "INPUT") return;
+      setMode(mode === "survey" ? null : "survey");
+    });
+  }
+  if (subDrillBtn) {
+    subDrillBtn.addEventListener("click", (ev) => {
+      if (ev.target.tagName === "INPUT" || ev.target.tagName === "LABEL") return;
+      setMode(mode === "drill" ? null : "drill");
+    });
+  }
+  if (surveySizeInput) {
+    surveySizeInput.addEventListener("input", () => {
+      surveySize = clampSurveySize(surveySizeInput.value);
+      // Don't snap the input while typing; only refresh the preview text.
+      updateSurveyCostPreview();
+      if (mode === "survey") drawGrid();
+    });
+    surveySizeInput.addEventListener("blur", () => {
+      surveySize = clampSurveySize(surveySizeInput.value);
+      surveySizeInput.value = String(surveySize);
+      updateSurveyCostPreview();
+      drawGrid();
+    });
+  }
+  for (const radio of drillTypeRadios()) {
+    radio.addEventListener("change", () => {
+      drillWellType = radio.value;
+      drawGrid();
+    });
+  }
+
+  // Modal wiring.
+  function hideModal() {
+    if (modal) modal.classList.add("hidden");
+    pendingDrill = null;
+  }
+  function showModal(bodyText, onConfirm) {
+    if (!modal) return;
+    modalBody.textContent = bodyText;
+    modal.classList.remove("hidden");
+    pendingDrill = onConfirm;
+  }
+  if (modalCancel) modalCancel.addEventListener("click", () => hideModal());
+  if (modalConfirm) {
+    modalConfirm.addEventListener("click", async () => {
+      const fn = pendingDrill;
+      hideModal();
+      if (fn) await fn();
+    });
+  }
+
+  window.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    const tag = (ev.target && ev.target.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (modal && !modal.classList.contains("hidden")) {
+      hideModal();
+      return;
+    }
+    if (mode) setMode(null);
+  });
+
   canvas.addEventListener("mousemove", (ev) => {
     const cell = gridCellFromEvent(ev);
     if (!hoverCell || hoverCell.x !== cell.x || hoverCell.y !== cell.y) {
       hoverCell = cell;
       drawGrid();
     }
+    updateHoverTooltip();
   });
   canvas.addEventListener("mouseleave", () => {
     hoverCell = null;
+    canvas.title = "";
     drawGrid();
   });
 
+  function updateHoverTooltip() {
+    if (!hoverCell) {
+      canvas.title = "";
+      return;
+    }
+    if (mode === "survey") {
+      const [x0, y0, x1, y1] = columnBounds(hoverCell.x, hoverCell.y, surveySize, cols, rows);
+      const cells = (x1 - x0) * (y1 - y0);
+      const cost = surveyCost(surveySize) || 0;
+      const explored = exploredColumnsSet();
+      let prior = 0;
+      for (let yy = y0; yy < y1; yy++) {
+        for (let xx = x0; xx < x1; xx++) {
+          if (explored.has(`${xx},${yy}`)) prior += 1;
+        }
+      }
+      const label = prior > 0 ? "resurvey" : `survey @ (${hoverCell.x}, ${hoverCell.y}) size=${surveySize}`;
+      const priorNote = prior > 0 ? ` (${prior} previously surveyed)` : "";
+      canvas.title = `${label} · cost $${Math.round(cost).toLocaleString()} · ${cells} cells${priorNote}`;
+    } else if (mode === "drill") {
+      if (drillAnchor) {
+        canvas.title = `drill @ (${drillAnchor.x}, ${drillAnchor.y}) target_z=${drillAnchor.target_z} type=${drillWellType}`;
+      } else {
+        canvas.title = "Pick a voxel in the Subsurface tab first to lock a drill target.";
+      }
+    } else {
+      canvas.title = "";
+    }
+  }
+
   canvas.addEventListener("click", async (ev) => {
-    if (!selectedType) return;
     const { x, y } = gridCellFromEvent(ev);
+    if (mode === "survey") {
+      await handleSurveyClick(x, y);
+      return;
+    }
+    if (mode === "drill") {
+      await handleDrillClick(x, y);
+      return;
+    }
+    if (!selectedType) return;
     try {
       const res = await fetch("/build", {
         method: "POST",
@@ -241,6 +552,12 @@
 
   canvas.addEventListener("contextmenu", async (ev) => {
     ev.preventDefault();
+    // While a subsurface mode is active, right-click cancels the mode and
+    // does NOT fall through to /demolish.
+    if (mode === "survey" || mode === "drill") {
+      setMode(null);
+      return;
+    }
     const { x, y } = gridCellFromEvent(ev);
     try {
       const res = await fetch("/demolish", {
@@ -256,6 +573,103 @@
       showToast(`network error: ${err}`, "error");
     }
   });
+
+  async function handleSurveyClick(x, y) {
+    const cost = surveyCost(surveySize) || 0;
+    if (treasury < cost) {
+      showToast(`survey rejected: insufficient_funds`, "error");
+      return;
+    }
+    try {
+      const res = await fetch("/survey", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ x, y, size: surveySize }),
+      });
+      const body = await res.json();
+      if (body.ok) {
+        const voxList = (body.result && body.result.voxels) || [];
+        const nHc = voxList.filter((v) => (v.oil_estimate_bbl || 0) > 0).length;
+        showToast(`survey done — ${nHc} HC voxels revealed · click to open Subsurface tab`, "ok-bridge");
+        // Toast click opens Subsurface tab + jumps to slice=anchor_y.
+        toastEl.onclick = () => {
+          activateSubsurfaceTab();
+          if (subAxisEl) subAxisEl.value = "y";
+          if (subSliceEl) {
+            subSliceEl.value = String(y);
+            renderSubsurface();
+          }
+          toastEl.className = "toast";
+          toastEl.onclick = null;
+        };
+      } else {
+        showToast(`survey rejected: ${body.error}`, "error");
+      }
+      await refreshRevealed();
+      tick();
+    } catch (err) {
+      showToast(`network error: ${err}`, "error");
+    }
+  }
+
+  async function handleDrillClick(_surfaceX, _surfaceY) {
+    if (!drillAnchor) {
+      showToast("pick a voxel in the Subsurface tab first", "error");
+      return;
+    }
+    const { x: ax, y: ay, target_z: az } = drillAnchor;
+    if (tileAt(ax, ay) || wellAt(ax, ay)) {
+      showToast("drill rejected: occupied", "error");
+      return;
+    }
+    const fire = () => fireDrill(ax, ay);
+    if (!poolHasHc(ax, ay, az)) {
+      const capex = drillCapex(drillWellType);
+      showModal(
+        `No surveyed HC voxels in the 3×3×3 drainage pool around (${ax}, ${ay}, ${az}). The well may produce 0 bbl/day — $${capex.toLocaleString()} CAPEX at risk.`,
+        fire,
+      );
+      return;
+    }
+    await fire();
+  }
+
+  async function fireDrill(surfaceX, surfaceY) {
+    try {
+      const res = await fetch("/drill", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          x: surfaceX,
+          y: surfaceY,
+          target_z: drillAnchor.target_z,
+          well_type: drillWellType,
+        }),
+      });
+      const body = await res.json();
+      if (body.ok) {
+        const wellId = body.result && (body.result.id || body.result.well_id) || "";
+        showToast(
+          `drilled ${drillWellType} well at (${surfaceX}, ${surfaceY}, ${drillAnchor.target_z})${wellId ? ` — id=${wellId}` : ""}`,
+          "ok",
+        );
+        drillAnchor = null;
+        renderSubsurface();
+        refreshBuildHint();
+      } else {
+        showToast(`drill rejected: ${body.error}`, "error");
+      }
+      tick();
+    } catch (err) {
+      showToast(`network error: ${err}`, "error");
+    }
+  }
+
+  function activateSubsurfaceTab() {
+    for (const btn of tabButtons) btn.classList.toggle("active", btn.dataset.tab === "subsurface");
+    for (const p of tabPanels) p.classList.toggle("active", p.id === "tab-subsurface");
+    refreshRevealed().then(renderSubsurface);
+  }
 
   nextDayBtn.addEventListener("click", async () => {
     nextDayBtn.disabled = true;
@@ -448,9 +862,53 @@
       const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
       title.textContent = `(${v.x}, ${v.y}, ${v.z}) — ${Math.round(v.oil_estimate_bbl).toLocaleString()} bbl, ${Math.round(v.perm_estimate_md)} mD`;
       r.appendChild(title);
+      if (mode === "drill") {
+        r.classList.add("drill-pickable");
+        r.addEventListener("click", () => {
+          drillAnchor = { x: v.x, y: v.y, target_z: v.z };
+          if (subTargetEl) {
+            subTargetEl.classList.remove("hidden");
+            subTargetEl.textContent = `selected target: (${v.x}, ${v.y}, ${v.z}) — click surface on the Map tab to drill`;
+          }
+          refreshBuildHint();
+          drawGrid();
+          renderSubsurface();
+        });
+      }
+      if (
+        drillAnchor
+        && drillAnchor.target_z === v.z
+        && drillAnchor.x === v.x
+        && drillAnchor.y === v.y
+      ) {
+        r.classList.add("drill-picked");
+      }
       filledG.appendChild(r);
     }
     subChartEl.appendChild(filledG);
+
+    // Wellhead markers ▼/▲ for wells on this slice.
+    const wellG = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    for (const w of wells) {
+      const offAxis = axis === "y" ? w.y : w.x;
+      if (offAxis !== slice) continue;
+      const lateral = axis === "y" ? w.x : w.y;
+      const symbol = w.type === "production" ? "▼" : "▲";
+      const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      t.setAttribute("x", (lateral * cw + cw / 2).toFixed(2));
+      t.setAttribute("y", (w.target_z * ch + ch * 0.78).toFixed(2));
+      t.setAttribute("fill", w.type === "production" ? "#3fbf7f" : "#a8d8ff");
+      t.setAttribute("font-size", Math.max(8, Math.floor(ch * 0.7)).toString());
+      t.setAttribute("text-anchor", "middle");
+      t.setAttribute("pointer-events", "none");
+      t.textContent = symbol;
+      const setpoint = w.setpoint_rate_bbl_day || 0;
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = `${w.id} · ${w.type} · (${w.x}, ${w.y}, ${w.target_z}) · setpoint ${Math.round(setpoint)} bbl/d`;
+      t.appendChild(title);
+      wellG.appendChild(t);
+    }
+    subChartEl.appendChild(wellG);
 
     // Axes labels.
     const axisLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
@@ -462,6 +920,16 @@
     subChartEl.appendChild(axisLabel);
 
     subStatsEl.textContent = `${revealedVoxels.length} revealed voxels · max est. ${Math.round(maxOil).toLocaleString()} bbl · ${onSlice.length} on this slice`;
+
+    if (subTargetEl) {
+      if (drillAnchor) {
+        subTargetEl.classList.remove("hidden");
+        subTargetEl.textContent = `selected target: (${drillAnchor.x}, ${drillAnchor.y}, ${drillAnchor.target_z}) — click surface on the Map tab to drill`;
+      } else {
+        subTargetEl.classList.add("hidden");
+        subTargetEl.textContent = "";
+      }
+    }
   }
 
   if (subAxisEl) subAxisEl.addEventListener("change", renderSubsurface);

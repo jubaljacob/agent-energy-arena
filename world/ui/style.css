@@ -103,6 +103,13 @@ main {
 .toast.show { opacity: 1; }
 .toast.error { border-color: #ff5050; color: #ffb0b0; }
 .toast.ok { border-color: #3fbf7f; color: #b0e8c8; }
+.toast.ok-bridge {
+  border-color: #f5d76e;
+  color: #f0e2a8;
+  cursor: pointer;
+  pointer-events: auto;
+  text-decoration: underline;
+}
 
 .balance-badge {
   padding: 2px 8px;
@@ -280,3 +287,81 @@ main {
 .finance-row.negative .finance-value { color: #ff7a59; }
 .finance-row.neutral .finance-value { color: #8b8f9a; }
 .finance-label { color: #c9cad0; }
+
+/* Issue 21: Subsurface tools palette + drill modal + hatching */
+.palette-sep {
+  margin: 1rem 0 0.5rem !important;
+}
+#sublist { list-style: none; padding: 0; margin: 0; }
+.modeItem {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  margin-bottom: 0.25rem;
+}
+.modeItem:hover { background: #1f2229; }
+.modeItem.selected {
+  background: #1f2229;
+  border-color: #f5d76e;
+}
+.sub-survey-swatch { background: repeating-linear-gradient(45deg, #f5d76e, #f5d76e 3px, #2a2d34 3px, #2a2d34 6px); }
+.sub-drill-swatch { background: #ff7a59; }
+.modeItem .bi-cost label { font-size: 0.75rem; color: #c9cad0; margin-right: 0.5rem; cursor: pointer; }
+.modeItem .bi-cost input[type="number"] {
+  width: 48px;
+  background: #0e0f12;
+  border: 1px solid #2a2d34;
+  color: #e6e7ea;
+  padding: 1px 3px;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.modeItem .bi-cost input[type="radio"] { accent-color: #ff7a59; }
+#survey-cost-preview { color: #d4a72c; font-variant-numeric: tabular-nums; }
+#grid.crosshair { cursor: crosshair; }
+
+/* Confirm modal */
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+.modal-backdrop.hidden { display: none; }
+.modal {
+  background: #16181d;
+  border: 1px solid #393d46;
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  max-width: 420px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.modal h3 { margin: 0 0 0.5rem; font-size: 1rem; color: #f5d76e; }
+.modal p { font-size: 0.85rem; color: #c9cad0; line-height: 1.4; margin: 0 0 1rem; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.modal-actions button {
+  padding: 0.4rem 0.9rem;
+  background: #2a2d34;
+  color: #e6e7ea;
+  border: 1px solid #393d46;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.modal-actions button.primary { background: #c97676; border-color: #d09bff; }
+.modal-actions button:hover { background: #393d46; }
+
+/* Subsurface tab: voxel-pick highlight + status line */
+#subchart rect.drill-pickable { cursor: pointer; }
+#subchart rect.drill-pickable:hover { stroke: #f5d76e !important; stroke-width: 1.5; }
+#subchart rect.drill-picked { stroke: #f5d76e !important; stroke-width: 2; }
+.sub-target {
+  color: #f5d76e;
+  font-weight: 600;
+}
+.sub-target.hidden { display: none; }
