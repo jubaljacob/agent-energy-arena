@@ -103,20 +103,20 @@ def daily_emissions_t(world: World) -> float:
     """Total CO2 emitted today, summed across the four PRD-revised sources.
 
     Reads coal_kwh / gas_kwh / refined_bbl from `state.today_summary_so_far`
-    (populated in the daily loop before this is called), and counts
-    operational industrial tiles directly. The brief's per-MWh-consumed
-    industrial term is intentionally absent — industrial kWh already shows
-    up in the coal/gas plant emissions serving those tiles.
+    (populated in the daily loop before this is called), and delegates the
+    per-industrial-tile flat term to `world.pricing.industrial_co2_for_tile`
+    so the aggregate and the per-tile popup row stay in lockstep. The
+    brief's per-MWh-consumed industrial term is intentionally absent —
+    industrial kWh already shows up in the coal/gas plant emissions serving
+    those tiles.
     """
+    from world.pricing import industrial_co2_for_tile
+
     s = world.state
     coal_mwh = s.today_summary_so_far.get("coal_kwh", 0.0) / 1000.0
     gas_mwh = s.today_summary_so_far.get("gas_kwh", 0.0) / 1000.0
     refined_bbl = s.today_summary_so_far.get("refined_bbl", 0.0)
-    industrial_flat_co2 = sum(
-        INDUSTRIAL_PROCESS_CO2_T_PER_DAY * workforce.efficiency(t)
-        for t in s.tiles
-        if t.type == "industrial" and t.operational
-    )
+    industrial_flat_co2 = sum(industrial_co2_for_tile(t) for t in s.tiles)
     return (
         coal_mwh * COAL_CO2_T_PER_MWH
         + gas_mwh * GAS_CO2_T_PER_MWH

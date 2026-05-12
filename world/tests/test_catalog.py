@@ -22,7 +22,7 @@ from world.subsurface import (
 
 def test_catalog_top_level_keys() -> None:
     cat = build_catalog()
-    assert set(cat.keys()) == {"tiles", "wells", "subsurface"}
+    assert set(cat.keys()) == {"tiles", "wells", "subsurface", "economics"}
 
 
 def test_catalog_subsurface_survey_block_matches_constants() -> None:

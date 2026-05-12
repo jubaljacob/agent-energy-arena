@@ -124,6 +124,61 @@ main {
   white-space: nowrap;
 }
 .toast.show { opacity: 1; }
+
+/* Per-tile hover popup. Positioned by JS relative to #canvasrow; follows
+   the cursor with a small offset. `pointer-events: none` so it never
+   steals clicks from the canvas underneath. */
+.hover-popup {
+  position: absolute;
+  pointer-events: none;
+  z-index: 50;
+  min-width: 200px;
+  max-width: 280px;
+  padding: 0.5rem 0.65rem;
+  background: rgba(22, 24, 29, 0.96);
+  border: 1px solid #393d46;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  color: #e6e7ea;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+.hover-popup.hidden { display: none; }
+.hover-popup .hp-title {
+  font-weight: 600;
+  text-transform: capitalize;
+  color: #f5d76e;
+  margin-bottom: 0.25rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.hover-popup .hp-coord {
+  color: #8b8f9a;
+  font-weight: 400;
+  font-size: 0.72rem;
+}
+.hover-popup .hp-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.hover-popup .hp-label { color: #8b8f9a; }
+.hover-popup .hp-val { color: #e6e7ea; }
+.hover-popup .hp-val.pos { color: #b0e8c8; }
+.hover-popup .hp-val.neg { color: #ffb0b0; }
+.hover-popup .hp-val.warn { color: #f0d28e; }
+.hover-popup .hp-sep {
+  border-top: 1px solid #2a2d34;
+  margin: 0.3rem 0;
+}
+.hover-popup .hp-note {
+  font-size: 0.7rem;
+  color: #8b8f9a;
+  margin-top: 0.25rem;
+  font-style: italic;
+}
 .toast.error { border-color: #ff5050; color: #ffb0b0; }
 .toast.ok { border-color: #3fbf7f; color: #b0e8c8; }
 .toast.ok-bridge {

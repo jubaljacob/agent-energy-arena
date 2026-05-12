@@ -25,6 +25,14 @@
     balance: document.getElementById("balance"),
   };
 
+  const hoverPopupEl = document.getElementById("hover-popup");
+  const canvasRowEl = document.getElementById("canvasrow");
+
+  // Refinery process-load is 200 kWh/bbl (slice 09). Per-day kWh for the
+  // hover popup = throughput × kWh/bbl. CO2 intensity is 0.3 t/bbl (slice 10).
+  const REFINERY_KWH_PER_BBL = 200;
+  const REFINERY_CO2_T_PER_BBL = 0.3;
+
   const TILE_COLORS = {
     town_hall: "#d4a72c",
     road: "#6e7177",
@@ -584,6 +592,165 @@
     if (mode) setMode(null);
   });
 
+  function fmtMoney(v) {
+    const sign = v < 0 ? "-" : "";
+    return `${sign}$${Math.abs(Math.round(v)).toLocaleString()}`;
+  }
+  function fmtNum(v, digits = 0) {
+    if (v == null) return "—";
+    return Number(v).toLocaleString(undefined, {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    });
+  }
+
+  function catalogSpec(tileType) {
+    if (!catalogRaw || !Array.isArray(catalogRaw.tiles)) return null;
+    return catalogRaw.tiles.find((e) => e.tile_type === tileType) || null;
+  }
+
+  function row(label, val, cls = "") {
+    return `<div class="hp-row"><span class="hp-label">${label}</span><span class="hp-val ${cls}">${val}</span></div>`;
+  }
+  const sep = () => `<div class="hp-sep"></div>`;
+
+  function buildTilePopup(t) {
+    const spec = catalogSpec(t.type);
+    const title = `<div class="hp-title"><span>${t.type.replace(/_/g, " ")}</span><span class="hp-coord">(${t.x}, ${t.y}) · day ${t.built_day}</span></div>`;
+    const rows = [];
+    rows.push(row("CAPEX paid", fmtMoney(t.capex_paid || 0)));
+    rows.push(row("OPEX / day", fmtMoney(-(t.opex_per_day || 0)), "neg"));
+    if (t.housing_capacity > 0) {
+      rows.push(row("Housing capacity", `${t.housing_capacity}`, "pos"));
+    }
+    if (t.jobs > 0) {
+      const band = staffingBand(t.staffed_jobs || 0, t.jobs);
+      const cls = band === "full" ? "pos" : band === "idle" || band === "low" ? "neg" : "warn";
+      rows.push(row("Jobs (staffed / total)", `${t.staffed_jobs || 0} / ${t.jobs}`, cls));
+    }
+    // Demand-tile (commercial/industrial).
+    if ((t.demand_kw || 0) > 0 && !(spec && spec.capacity_kw > 0)) {
+      const note = t.type === "commercial" ? " peak (8–20h)" : " continuous";
+      rows.push(row("Demand", `${fmtNum(t.demand_kw)} kW${note}`, "warn"));
+    }
+    // Generators.
+    if (spec && spec.capacity_kw > 0) {
+      const cap = spec.capacity_kw;
+      const out = t.current_output_kw || 0;
+      const pct = cap > 0 ? (100 * out / cap).toFixed(0) : "—";
+      rows.push(row("Capacity", `${fmtNum(cap)} kW`));
+      rows.push(row("Current output", `${fmtNum(out, 1)} kW (${pct}%)`, "pos"));
+      if ((spec.fuel_cost_per_mwh || 0) > 0) {
+        rows.push(row("Fuel cost", `$${fmtNum(spec.fuel_cost_per_mwh, 2)} / MWh`, "neg"));
+      }
+      if ((spec.co2_t_per_mwh || 0) > 0) {
+        const dailyCo2 = (out * 24 / 1000) * spec.co2_t_per_mwh;
+        rows.push(row("CO₂", `${fmtNum(spec.co2_t_per_mwh, 2)} t/MWh · ${fmtNum(dailyCo2, 2)} t/day`, "neg"));
+      }
+      if ((spec.co2_t_per_mwh || 0) === 0 && (spec.fuel_cost_per_mwh || 0) === 0) {
+        rows.push(row("Emissions", "0 (renewable)", "pos"));
+      }
+    }
+    // Refinery process-load + product economics.
+    if (t.type === "refinery") {
+      const throughput = t.current_throughput_bbl_day || 0;
+      const setpoint = t.setpoint_rate_bbl_day || 0;
+      const procKw = (throughput * REFINERY_KWH_PER_BBL) / 24;
+      const refined = throughput * REFINERY_YIELD;
+      const co2 = throughput * REFINERY_CO2_T_PER_BBL;
+      rows.push(row("Setpoint", `${fmtNum(setpoint)} bbl/d`));
+      rows.push(row("Throughput (yest.)", `${fmtNum(throughput, 1)} bbl/d`, "pos"));
+      rows.push(row("Refined yield", `${fmtNum(refined, 1)} bbl (85%)`, "pos"));
+      rows.push(row("Process load", `${fmtNum(procKw, 1)} kW avg`, "warn"));
+      rows.push(row("CO₂", `${fmtNum(co2, 2)} t/day`, "neg"));
+    }
+    // Industrial economics (slice 01 of facility-economics-popup PRD). All
+    // four rows come from server-stamped /state fields; the Net row is
+    // server-computed so the UI never re-derives it client-side.
+    if (t.type === "industrial") {
+      const co2 = t.estimated_co2_per_day || 0;
+      const carbonCost = t.estimated_carbon_cost_per_day || 0;
+      const revenue = t.estimated_revenue_per_day || 0;
+      const net = t.estimated_net_per_day || 0;
+      rows.push(row("CO₂ / day", `${fmtNum(co2, 2)} t`, "neg"));
+      rows.push(row("Carbon cost / day", fmtMoney(-carbonCost), "neg"));
+      rows.push(row("Revenue / day", fmtMoney(revenue), "pos"));
+      rows.push(row("Net / day", fmtMoney(net), net >= 0 ? "pos" : "neg"));
+    }
+    if (t.type === "town_hall") {
+      rows.push(row("Civic center", "counts as road", "pos"));
+    }
+    if (t.type === "park") {
+      rows.push(row("Effect", "+0.05 happiness / extra park", "pos"));
+    }
+    if (!t.operational) {
+      rows.push(row("Status", "non-operational", "neg"));
+    }
+    let note = "";
+    if (spec && spec.description) {
+      note = `<div class="hp-note">${spec.description}</div>`;
+    }
+    return title + sep() + rows.join("") + note;
+  }
+
+  function buildWellPopup(w) {
+    const wellJobs = wellJobsByType();
+    const jobs = wellJobs[w.type] || 0;
+    const staffed = w.staffed_jobs || 0;
+    const band = staffingBand(staffed, jobs);
+    const jcls = band === "full" ? "pos" : band === "idle" || band === "low" ? "neg" : "warn";
+    const title = `<div class="hp-title"><span>${w.type} well</span><span class="hp-coord">(${w.x}, ${w.y}, z=${w.target_z}) · day ${w.drilled_day}</span></div>`;
+    const rows = [];
+    rows.push(row("ID", w.id));
+    rows.push(row("CAPEX paid", fmtMoney(w.capex_paid || 0)));
+    rows.push(row("OPEX / day", fmtMoney(-(w.opex_per_day || 0)), "neg"));
+    if (jobs > 0) {
+      rows.push(row("Jobs (staffed / total)", `${staffed} / ${jobs}`, jcls));
+    }
+    const setpoint = w.setpoint_rate_bbl_day || 0;
+    const rate = w.current_rate_bbl_day || 0;
+    rows.push(row("Setpoint", `${fmtNum(setpoint)} bbl/d`));
+    rows.push(row("Actual rate", `${fmtNum(rate, 1)} bbl/d`, "pos"));
+    if (w.type === "production") {
+      rows.push(row("Cumulative produced", `${fmtNum(w.cumulative_produced_bbl || 0)} bbl`, "pos"));
+    } else {
+      const kwh = rate * 50; // INJECTION_KWH_PER_BBL = 50
+      rows.push(row("Injection load", `${fmtNum(kwh / 24, 1)} kW avg`, "warn"));
+      rows.push(row("Cumulative injected", `${fmtNum(w.cumulative_injected_bbl || 0)} bbl`));
+    }
+    return title + sep() + rows.join("");
+  }
+
+  function updateHoverPopup(ev) {
+    if (!hoverPopupEl || !canvasRowEl) return;
+    if (!hoverCell) {
+      hoverPopupEl.classList.add("hidden");
+      return;
+    }
+    const tile = tileAt(hoverCell.x, hoverCell.y);
+    const well = wellAt(hoverCell.x, hoverCell.y);
+    if (!tile && !well) {
+      hoverPopupEl.classList.add("hidden");
+      return;
+    }
+    hoverPopupEl.innerHTML = tile ? buildTilePopup(tile) : buildWellPopup(well);
+    hoverPopupEl.classList.remove("hidden");
+    // Position relative to #canvasrow (canvasrow is position:relative).
+    const rect = canvasRowEl.getBoundingClientRect();
+    const offset = 14;
+    let px = ev.clientX - rect.left + offset;
+    let py = ev.clientY - rect.top + offset;
+    const popupRect = hoverPopupEl.getBoundingClientRect();
+    if (px + popupRect.width > rect.width) {
+      px = ev.clientX - rect.left - popupRect.width - offset;
+    }
+    if (py + popupRect.height > rect.height) {
+      py = rect.height - popupRect.height - 4;
+    }
+    hoverPopupEl.style.left = `${Math.max(0, px)}px`;
+    hoverPopupEl.style.top = `${Math.max(0, py)}px`;
+  }
+
   canvas.addEventListener("mousemove", (ev) => {
     const cell = gridCellFromEvent(ev);
     if (!hoverCell || hoverCell.x !== cell.x || hoverCell.y !== cell.y) {
@@ -591,10 +758,12 @@
       drawGrid();
     }
     updateHoverTooltip();
+    updateHoverPopup(ev);
   });
   canvas.addEventListener("mouseleave", () => {
     hoverCell = null;
     canvas.title = "";
+    if (hoverPopupEl) hoverPopupEl.classList.add("hidden");
     drawGrid();
   });
 
@@ -1153,6 +1322,7 @@
     financeListEl.innerHTML = "";
     const rows = [
       ["Tax revenue", summary.tax_revenue || 0, "+"],
+      ["Industrial revenue", summary.industrial_revenue || 0, "+"],
       ["Power revenue", summary.power_revenue || 0, "+"],
       ["Crude (direct sale)", summary.crude_revenue || 0, "+"],
       ["Refined oil", summary.refined_revenue || 0, "+"],

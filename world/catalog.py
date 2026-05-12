@@ -66,7 +66,10 @@ TILE_CATALOG: dict[str, TileSpec] = {
         capex=20_000,
         opex_per_day=200,
         requires_road=True,
-        description="+30 jobs. 300 kW continuous demand. Requires road adjacency.",
+        description=(
+            "+30 jobs. 300 kW continuous demand. Earns $500/day × staffing, "
+            "emits 2 t CO2/day × staffing. Requires road adjacency."
+        ),
         jobs=30,
         demand_kw=300,
     ),
@@ -184,6 +187,8 @@ def _spec_to_dict(spec: TileSpec) -> dict[str, Any]:
 
 
 def build_catalog() -> dict[str, Any]:
+    from world.economy import CARBON_PRICE_USD_PER_TON
+    from world.pricing import INDUSTRIAL_REVENUE_PER_DAY
     from world.subsurface import (
         CRUDE_PRICE_USD_PER_BBL,
         INJECTION_KWH_PER_BBL,
@@ -228,7 +233,16 @@ def build_catalog() -> dict[str, Any]:
             },
         },
     }
-    return {"tiles": tiles, "wells": wells, "subsurface": subsurface}
+    economics = {
+        "industrial_revenue_per_day": INDUSTRIAL_REVENUE_PER_DAY,
+        "carbon_price": CARBON_PRICE_USD_PER_TON,
+    }
+    return {
+        "tiles": tiles,
+        "wells": wells,
+        "subsurface": subsurface,
+        "economics": economics,
+    }
 
 
 def is_buildable(tile_type: str) -> bool:

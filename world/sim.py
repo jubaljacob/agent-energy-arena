@@ -43,6 +43,7 @@ from world.power import (
     dispatch,
     total_demand_kw,
 )
+from world.pricing import update_civic_revenue
 from world.state import Tile, Well, WorldState
 from world.subsurface import (
     CRUDE_PRICE_USD_PER_BBL,
@@ -72,7 +73,22 @@ from world.workforce import hire_to_fill
 from world.workforce import unemployed as workforce_unemployed
 
 
-def _tile_to_dict(t: Tile) -> dict[str, Any]:
+def _tile_to_dict(t: Tile, world: World) -> dict[str, Any]:
+    from world.pricing import industrial_co2_for_tile, industrial_revenue_for_tile
+
+    # Slice 01 surfaces industrial-only economics. Non-industrial tiles get
+    # 0.0 placeholders for the four estimated_* keys; later slices fill in
+    # commercial, plant, refinery, and well values via the same fields.
+    if t.type == "industrial":
+        revenue = industrial_revenue_for_tile(t)
+        co2_t = industrial_co2_for_tile(t)
+        carbon_cost = co2_t * world.state.carbon_price
+        net = revenue - t.opex_per_day - carbon_cost
+    else:
+        revenue = 0.0
+        co2_t = 0.0
+        carbon_cost = 0.0
+        net = 0.0
     return {
         "id": t.id,
         "type": t.type,
@@ -89,6 +105,10 @@ def _tile_to_dict(t: Tile) -> dict[str, Any]:
         "current_output_kw": t.current_output_kw,
         "setpoint_rate_bbl_day": t.setpoint_rate_bbl_day,
         "current_throughput_bbl_day": t.current_throughput_bbl_day,
+        "estimated_revenue_per_day": revenue,
+        "estimated_co2_per_day": co2_t,
+        "estimated_carbon_cost_per_day": carbon_cost,
+        "estimated_net_per_day": net,
     }
 
 
@@ -257,7 +277,7 @@ class World:
         return {
             "ok": True,
             "treasury_after": self.state.treasury,
-            "result": _tile_to_dict(tile),
+            "result": _tile_to_dict(tile, self),
         }
 
     def demolish(self, x: int, y: int) -> dict[str, Any]:
@@ -758,6 +778,11 @@ class World:
         self.state.last_day_demand_kw_by_hour = demand_trace
         self.state.last_day_balance_state_by_hour = balance_trace
 
+        # Civic revenue (industrial + commercial) accrues before the
+        # population update so commercial revenue (slice 02) uses today's
+        # lived population, not tomorrow's survivors.
+        update_civic_revenue(self)
+
         # Population dynamics + tax revenue (brief §4.8). Deterministic; no
         # RNG draws, so the sim_rng contract is unaffected.
         update_population(self)
@@ -803,7 +828,7 @@ class World:
                     c.manual_game_days if self.session == "manual" else c.game_days
                 ),
             },
-            "tiles": [_tile_to_dict(t) for t in s.tiles],
+            "tiles": [_tile_to_dict(t, self) for t in s.tiles],
             "wells": [_well_to_dict(w) for w in s.wells],
             "reservoirs_revealed": reservoirs_summary(self.subsurface, top_k=10),
             "active_events": list(s.active_events),
