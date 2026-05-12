@@ -193,6 +193,66 @@ def test_summarize_state_surfaces_oilfield_v2_well_fields() -> None:
     assert "boost=" not in inj_line
 
 
+def test_summarize_state_voxel_block_label_renamed() -> None:
+    """The per-voxel block label is `RESERVOIRS_VOXELS_TOP-…`, freeing the
+    `RESERVOIRS (` prefix for the new per-reservoir rollup block."""
+    api, _ = _client()
+    api.reset(seed=42)
+    # Survey to populate the top-K voxel block.
+    api.survey(16, 16, size=8)
+    s = api.state()
+    summary = summarize_state(s, forecast=None)
+    assert "RESERVOIRS_VOXELS_TOP-" in summary
+    # The old label must not appear (would shadow the new rollup label).
+    assert "RESERVOIRS top-" not in summary
+
+
+def test_summarize_state_renders_reservoirs_rollup_above_voxel_block() -> None:
+    """A `RESERVOIRS (N):` block — driven by /state.reservoirs_summary —
+    must appear above the per-voxel block and carry `R{id}`, `est=`,
+    `remain=`, `wells=` substrings."""
+    api, _ = _client()
+    api.reset(seed=42)
+    s = dict(api.state())
+    s["reservoirs_summary"] = [
+        {
+            "reservoir_id": 3,
+            "estimated_bbl": 8_200_000.0,
+            "remaining_bbl": 7_100_000.0,
+            "n_revealed_voxels": 42,
+            "cumulative_produced_bbl": 1_100_000.0,
+            "cumulative_injected_bbl": 500_000.0,
+            "producer_ids": ["W1", "W2"],
+            "injector_ids": ["W3"],
+        }
+    ]
+    s["reservoirs_revealed"] = {
+        "top_k": [
+            {
+                "x": 5,
+                "y": 5,
+                "z": 6,
+                "reservoir_id": 3,
+                "oil_estimate_bbl": 50_000.0,
+                "perm_estimate_md": 400.0,
+            }
+        ],
+        "n_revealed_voxels": 1,
+        "total_estimated_oil_remaining_bbl": 50_000.0,
+        "n_explored_columns": 1,
+    }
+    summary = summarize_state(s, forecast=None)
+    assert "RESERVOIRS (" in summary
+    assert "R3" in summary
+    assert "est=" in summary
+    assert "remain=" in summary
+    assert "wells=" in summary
+    # Above the voxel block.
+    roll_idx = summary.index("RESERVOIRS (")
+    vox_idx = summary.index("RESERVOIRS_VOXELS_TOP-")
+    assert roll_idx < vox_idx
+
+
 def test_summarize_state_surfaces_pipeline_networks_and_orphans() -> None:
     """Top-level `pipeline_networks` + `orphan_well_ids` / `orphan_refinery_ids`
     must appear in the summary so the LLM knows what's connected."""

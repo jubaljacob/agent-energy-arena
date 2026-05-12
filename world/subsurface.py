@@ -443,8 +443,14 @@ def well_production_bbl_day(
     return q_actual
 
 
-def reservoirs_summary(grid: SubsurfaceGrid, *, top_k: int = 10) -> dict[str, Any]:
-    """Bounded view for `/state.reservoirs_revealed` — top-K plus aggregates."""
+def reservoirs_voxel_summary(grid: SubsurfaceGrid, *, top_k: int = 10) -> dict[str, Any]:
+    """Bounded view for `/state.reservoirs_revealed` — top-K plus aggregates.
+
+    Renamed from `reservoirs_summary` to free that name for the new
+    per-reservoir rollup added in wells-reservoir-rollup #01; this helper
+    still ships the per-voxel `top_k` strip plus the world-wide
+    n_revealed / n_explored aggregates that the UI consumes.
+    """
     revealed = [v for v in grid.voxels.values() if v.estimates]
     total_oil = 0.0
     for v in revealed:
@@ -456,3 +462,71 @@ def reservoirs_summary(grid: SubsurfaceGrid, *, top_k: int = 10) -> dict[str, An
         "total_estimated_oil_remaining_bbl": total_oil,
         "n_explored_columns": len(grid.explored_columns),
     }
+
+
+def reservoirs_summary(grid: SubsurfaceGrid, wells: list[Any]) -> list[dict[str, Any]]:
+    """Per-reservoir rollup for the Wells-tab grouping + LLM RESERVOIRS block.
+
+    Returns one entry per `reservoir_id` that has at least one revealed
+    voxel. Reservoirs with zero revealed voxels are omitted entirely (no
+    information leak). Entries are sorted by ascending `reservoir_id`.
+
+    Each entry carries:
+      * `reservoir_id`
+      * `estimated_bbl` — Σ latest `oil_estimate_bbl` over revealed
+        voxels of this reservoir (resurveying grows it).
+      * `remaining_bbl` — `estimated_bbl − cumulative_produced_bbl`.
+        Allowed to go negative (no clamp); the UI displays the raw
+        signed value so players see when a reservoir has been
+        over-pulled relative to the noisy estimate.
+      * `n_revealed_voxels` — count of voxels in this reservoir with
+        ≥1 survey entry.
+      * `cumulative_produced_bbl` — Σ over production wells with
+        matching `reservoir_id` (null-reservoir wells contribute to
+        NO reservoir).
+      * `cumulative_injected_bbl` — Σ over injection wells with
+        matching `reservoir_id`.
+      * `producer_ids` / `injector_ids` — ascending-sorted lists of
+        well-id strings in this reservoir.
+    """
+    revealed_by_id: dict[int, list[Voxel]] = {}
+    for v in grid.voxels.values():
+        if not v.estimates:
+            continue
+        revealed_by_id.setdefault(v.reservoir_id, []).append(v)
+
+    producers_by_id: dict[int, list[Any]] = {}
+    injectors_by_id: dict[int, list[Any]] = {}
+    for w in wells:
+        rid = getattr(w, "reservoir_id", None)
+        if rid is None:
+            continue
+        if getattr(w, "type", None) == "production":
+            producers_by_id.setdefault(int(rid), []).append(w)
+        elif getattr(w, "type", None) == "injection":
+            injectors_by_id.setdefault(int(rid), []).append(w)
+
+    out: list[dict[str, Any]] = []
+    for rid in sorted(revealed_by_id.keys()):
+        voxels = revealed_by_id[rid]
+        estimated = 0.0
+        for v in voxels:
+            oil_est, _perm, _day = _latest_estimate(v)
+            estimated += oil_est
+        prods = producers_by_id.get(rid, [])
+        injs = injectors_by_id.get(rid, [])
+        cum_produced = sum(float(w.cumulative_produced_bbl) for w in prods)
+        cum_injected = sum(float(w.cumulative_injected_bbl) for w in injs)
+        out.append(
+            {
+                "reservoir_id": rid,
+                "estimated_bbl": estimated,
+                "remaining_bbl": estimated - cum_produced,
+                "n_revealed_voxels": len(voxels),
+                "cumulative_produced_bbl": cum_produced,
+                "cumulative_injected_bbl": cum_injected,
+                "producer_ids": sorted(str(w.id) for w in prods),
+                "injector_ids": sorted(str(w.id) for w in injs),
+            }
+        )
+    return out

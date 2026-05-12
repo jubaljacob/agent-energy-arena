@@ -142,11 +142,29 @@ def summarize_state(
             "(orphan producers sell raw @$40/bbl; orphan refineries idle)"
         )
 
-    # --- Reservoirs: top-K voxels ---------------------------------------
+    # --- Reservoirs: per-reservoir rollup, then top-K voxels -------------
+    # The rollup block sits ABOVE the voxel block so the LLM reads the
+    # reservoir-level picture (estimated bbl, remaining, producer/injector
+    # ids) before drilling into per-voxel pick targets.
+    reservoirs_roll = obs.get("reservoirs_summary") or []
+    if reservoirs_roll:
+        lines.append(f"RESERVOIRS ({len(reservoirs_roll)}):")
+        for r in reservoirs_roll:
+            n_prod = len(r.get("producer_ids") or [])
+            n_inj = len(r.get("injector_ids") or [])
+            lines.append(
+                f"  R{r.get('reservoir_id')} "
+                f"est={_fmt(r.get('estimated_bbl', 0))} "
+                f"remain={_fmt(r.get('remaining_bbl', 0))} "
+                f"revealed={r.get('n_revealed_voxels', 0)}vox "
+                f"wells={n_prod}P+{n_inj}I "
+                f"produced={_fmt(r.get('cumulative_produced_bbl', 0))} "
+                f"injected={_fmt(r.get('cumulative_injected_bbl', 0))}"
+            )
     reservoirs = obs.get("reservoirs_revealed") or {}
     top = reservoirs.get("top_k") or []
     if top:
-        lines.append(f"RESERVOIRS top-{min(len(top), TOP_K_VOXELS)} revealed voxels:")
+        lines.append(f"RESERVOIRS_VOXELS_TOP-{min(len(top), TOP_K_VOXELS)} revealed voxels:")
         for v in top[:TOP_K_VOXELS]:
             lines.append(
                 f"  ({v.get('x')},{v.get('y')},{v.get('z')}) "

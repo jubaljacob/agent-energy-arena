@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from world.api import create_app
 from world.sim import World
+from world.state import Well
 from world.subsurface import (
     N_RESERVOIRS_MAX,
     N_RESERVOIRS_MIN,
@@ -20,6 +21,7 @@ from world.subsurface import (
     SEISMIC_MIN_SIZE,
     VOXEL_VOLUME_BBL,
     generate_subsurface,
+    reservoirs_summary,
     survey_cost,
     voxel_reservoir_id,
     well_reservoir_id,
@@ -529,3 +531,207 @@ def test_reservoirs_revealed_rows_carry_reservoir_id():
     res = w.reservoirs(min_oil=0.0, top_k=50)
     for row in res["voxels"]:
         assert row["reservoir_id"] >= 1
+
+
+# -- reservoirs_summary rollup (wells-reservoir-rollup #01) ----------------
+
+
+def _make_producer(
+    wid: str, x: int, y: int, z: int, reservoir_id: int | None, produced: float = 0.0
+) -> Well:
+    return Well(
+        id=wid,
+        type="production",
+        x=x,
+        y=y,
+        target_z=z,
+        drilled_day=0,
+        reservoir_id=reservoir_id,
+        cumulative_produced_bbl=produced,
+    )
+
+
+def _make_injector(
+    wid: str, x: int, y: int, z: int, reservoir_id: int | None, injected: float = 0.0
+) -> Well:
+    return Well(
+        id=wid,
+        type="injection",
+        x=x,
+        y=y,
+        target_z=z,
+        drilled_day=0,
+        reservoir_id=reservoir_id,
+        cumulative_injected_bbl=injected,
+    )
+
+
+def test_reservoirs_summary_empty_when_no_voxels_revealed():
+    w = World()
+    w.reset(seed=42)
+    assert reservoirs_summary(w.subsurface, w.state.wells) == []
+
+
+def test_reservoirs_summary_estimated_equals_sum_latest_oil_estimates():
+    w = World()
+    w.reset(seed=42)
+    hc = next(iter(w.subsurface.voxels.values()))
+    w.survey(hc.x, hc.y, size=4)
+    expected = sum(
+        v.estimates[-1]["oil_estimate_bbl"]
+        for v in w.subsurface.voxels.values()
+        if v.estimates and v.reservoir_id == hc.reservoir_id
+    )
+    out = reservoirs_summary(w.subsurface, w.state.wells)
+    rid_row = next(r for r in out if r["reservoir_id"] == hc.reservoir_id)
+    assert rid_row["estimated_bbl"] == pytest.approx(expected)
+
+
+def test_reservoirs_summary_resurvey_grows_estimated():
+    w = World()
+    w.reset(seed=42)
+    hc = next(iter(w.subsurface.voxels.values()))
+    w.survey(hc.x, hc.y, size=4)
+    first = next(
+        r
+        for r in reservoirs_summary(w.subsurface, w.state.wells)
+        if r["reservoir_id"] == hc.reservoir_id
+    )
+    w.survey(hc.x, hc.y, size=4)
+    second = next(
+        r
+        for r in reservoirs_summary(w.subsurface, w.state.wells)
+        if r["reservoir_id"] == hc.reservoir_id
+    )
+    # Resurvey uses the LATEST estimate; the value changes (independent noise)
+    # but the helper still computes a fresh sum-of-latest, not a cumulative
+    # one. Pin: estimated == sum of latest oil_estimate per revealed voxel.
+    expected = sum(
+        v.estimates[-1]["oil_estimate_bbl"]
+        for v in w.subsurface.voxels.values()
+        if v.estimates and v.reservoir_id == hc.reservoir_id
+    )
+    assert second["estimated_bbl"] == pytest.approx(expected)
+    # Independence: two surveys producing identical sums is astronomically
+    # unlikely. Pin the inequality so a future regression that latches onto
+    # only the first survey reading breaks here.
+    assert first["estimated_bbl"] != second["estimated_bbl"]
+
+
+def test_reservoirs_summary_remaining_can_go_negative():
+    w = World()
+    w.reset(seed=42)
+    hc = next(iter(w.subsurface.voxels.values()))
+    w.survey(hc.x, hc.y, size=4)
+    # Inject a fake producer in the same reservoir with cumulative > estimated.
+    estimated = sum(
+        v.estimates[-1]["oil_estimate_bbl"]
+        for v in w.subsurface.voxels.values()
+        if v.estimates and v.reservoir_id == hc.reservoir_id
+    )
+    fake_produced = estimated + 1_000_000.0
+    wells = [_make_producer("W1", hc.x, hc.y, hc.z, hc.reservoir_id, fake_produced)]
+    out = reservoirs_summary(w.subsurface, wells)
+    rid_row = next(r for r in out if r["reservoir_id"] == hc.reservoir_id)
+    assert rid_row["remaining_bbl"] == pytest.approx(estimated - fake_produced)
+    assert rid_row["remaining_bbl"] < 0
+
+
+def test_reservoirs_summary_omits_unsurveyed_reservoirs():
+    w = World()
+    w.reset(seed=42)
+    hc = next(iter(w.subsurface.voxels.values()))
+    w.survey(hc.x, hc.y, size=4)
+    out = reservoirs_summary(w.subsurface, w.state.wells)
+    rids = {r["reservoir_id"] for r in out}
+    # At least one (the surveyed one) must appear.
+    assert hc.reservoir_id in rids
+    # Reservoirs with no revealed voxel must be absent.
+    all_rids = {v.reservoir_id for v in w.subsurface.voxels.values()}
+    surveyed_rids = {v.reservoir_id for v in w.subsurface.voxels.values() if v.estimates}
+    unsurveyed = all_rids - surveyed_rids
+    for missing_rid in unsurveyed:
+        assert missing_rid not in rids
+
+
+def test_reservoirs_summary_empty_well_lists_when_no_wells_in_reservoir():
+    w = World()
+    w.reset(seed=42)
+    hc = next(iter(w.subsurface.voxels.values()))
+    w.survey(hc.x, hc.y, size=4)
+    out = reservoirs_summary(w.subsurface, [])
+    rid_row = next(r for r in out if r["reservoir_id"] == hc.reservoir_id)
+    assert rid_row["producer_ids"] == []
+    assert rid_row["injector_ids"] == []
+    assert rid_row["cumulative_produced_bbl"] == 0.0
+    assert rid_row["cumulative_injected_bbl"] == 0.0
+
+
+def test_reservoirs_summary_entries_sorted_by_ascending_reservoir_id():
+    """Survey every column we can afford so every reservoir is revealed,
+    then assert the entries come back in ascending id order."""
+    w = World()
+    w.reset(seed=42)
+    w.state.treasury = 10_000_000
+    for cx in range(0, 32, 4):
+        for cy in range(0, 32, 4):
+            w.survey(cx, cy, size=4)
+    out = reservoirs_summary(w.subsurface, w.state.wells)
+    rids = [r["reservoir_id"] for r in out]
+    assert rids == sorted(rids)
+    assert len(rids) >= 2  # seed 42 has 3-7 reservoirs; need at least 2 to test
+
+
+def test_reservoirs_summary_producer_and_injector_id_lists_sorted():
+    w = World()
+    w.reset(seed=42)
+    hc = next(iter(w.subsurface.voxels.values()))
+    w.survey(hc.x, hc.y, size=4)
+    wells = [
+        _make_producer("W3", hc.x, hc.y, hc.z, hc.reservoir_id, 100.0),
+        _make_producer("W1", hc.x, hc.y, hc.z, hc.reservoir_id, 50.0),
+        _make_injector("W4", hc.x, hc.y, hc.z, hc.reservoir_id, 20.0),
+        _make_injector("W2", hc.x, hc.y, hc.z, hc.reservoir_id, 30.0),
+    ]
+    out = reservoirs_summary(w.subsurface, wells)
+    rid_row = next(r for r in out if r["reservoir_id"] == hc.reservoir_id)
+    assert rid_row["producer_ids"] == ["W1", "W3"]
+    assert rid_row["injector_ids"] == ["W2", "W4"]
+    assert rid_row["cumulative_produced_bbl"] == pytest.approx(150.0)
+    assert rid_row["cumulative_injected_bbl"] == pytest.approx(50.0)
+
+
+def test_reservoirs_summary_null_reservoir_wells_contribute_to_nothing():
+    """A well drilled into rock (reservoir_id=None) must NOT contribute to
+    any reservoir's cumulative_produced/injected totals or id lists."""
+    w = World()
+    w.reset(seed=42)
+    hc = next(iter(w.subsurface.voxels.values()))
+    w.survey(hc.x, hc.y, size=4)
+    wells = [
+        _make_producer("W1", hc.x, hc.y, hc.z, hc.reservoir_id, 200.0),
+        _make_producer("W2", 0, 0, 0, None, 99999.0),  # drilled into rock
+    ]
+    out = reservoirs_summary(w.subsurface, wells)
+    rid_row = next(r for r in out if r["reservoir_id"] == hc.reservoir_id)
+    assert rid_row["producer_ids"] == ["W1"]
+    assert rid_row["cumulative_produced_bbl"] == pytest.approx(200.0)
+    # No null-reservoir entry exists in the output (there's no `null` id).
+    assert all(r["reservoir_id"] is not None for r in out)
+
+
+def test_state_dict_exposes_reservoirs_summary_top_level_key():
+    w = World()
+    w.reset(seed=42)
+    s = w.state_dict()
+    assert "reservoirs_summary" in s
+    assert isinstance(s["reservoirs_summary"], list)
+
+
+def test_api_state_exposes_reservoirs_summary_top_level_key():
+    w = World()
+    w.reset(seed=42)
+    client = TestClient(create_app(world=w))
+    s = client.get("/state").json()
+    assert "reservoirs_summary" in s
+    assert isinstance(s["reservoirs_summary"], list)
