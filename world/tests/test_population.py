@@ -39,6 +39,9 @@ def _inject_tile(
     producer tiles look fully staffed. Tests that want a partially-staffed
     tile pass ``staffed_jobs=N`` explicitly.
     """
+    from world.catalog import TILE_CATALOG
+
+    spec = TILE_CATALOG.get(type)
     w.state.tiles.append(
         Tile(
             id=f"injected-{x}-{y}",
@@ -49,6 +52,7 @@ def _inject_tile(
             operational=operational,
             jobs=jobs,
             housing_capacity=housing_capacity,
+            demand_kw=spec.demand_kw if spec is not None else 0.0,
             staffed_jobs=jobs if staffed_jobs is None else staffed_jobs,
         )
     )

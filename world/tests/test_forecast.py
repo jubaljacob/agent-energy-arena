@@ -306,11 +306,6 @@ def _world_with_industrial(seed: int = 42) -> World:
     return w
 
 
-@pytest.mark.skip(
-    reason="Pending slice 05 (demand-side efficiency scaling). Until "
-    "total_demand_kw scales by efficiency, the two forecasts are identical. "
-    "Un-skip when WORKFORCE_DEMAND_EFFICIENCY lands."
-)
 def test_forecast_demand_drops_when_industrial_is_half_staffed():
     """Slice 03 AC: half-staffed producer → strictly-lower forecast demand."""
     w = _world_with_industrial()

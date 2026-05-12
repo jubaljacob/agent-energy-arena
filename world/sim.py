@@ -83,6 +83,7 @@ def _tile_to_dict(t: Tile) -> dict[str, Any]:
         "opex_per_day": t.opex_per_day,
         "housing_capacity": t.housing_capacity,
         "jobs": t.jobs,
+        "demand_kw": t.demand_kw,
         "staffed_jobs": t.staffed_jobs,
         "current_output_kw": t.current_output_kw,
         "setpoint_rate_bbl_day": t.setpoint_rate_bbl_day,
@@ -210,6 +211,7 @@ class World:
                 opex_per_day=spec.opex_per_day,
                 housing_capacity=spec.housing_capacity,
                 jobs=spec.jobs,
+                demand_kw=spec.demand_kw,
             )
         )
 
@@ -247,6 +249,7 @@ class World:
             opex_per_day=spec.opex_per_day,
             housing_capacity=spec.housing_capacity,
             jobs=spec.jobs,
+            demand_kw=spec.demand_kw,
         )
         self.state.tiles.append(tile)
         hire_to_fill(self.state)

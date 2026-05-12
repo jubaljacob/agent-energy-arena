@@ -270,7 +270,18 @@ def test_demand_surprise_multiplies_industrial_commercial():
 
     w = World()
     w.reset(seed=42)
-    w.state.tiles.append(Tile(id="injected-industrial", type="industrial", x=5, y=5, built_day=0))
+    w.state.tiles.append(
+        Tile(
+            id="injected-industrial",
+            type="industrial",
+            x=5,
+            y=5,
+            built_day=0,
+            jobs=30,
+            staffed_jobs=30,
+            demand_kw=300,
+        )
+    )
     base = total_demand_kw(w.state, h=14)
     w.state.active_events.append(
         {"type": "demand_surprise", "started_day": 0, "ends_day": 10, "severity": 1.3}

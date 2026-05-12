@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from world import workforce
+
 if TYPE_CHECKING:
     from world.sim import World
     from world.state import Tile
@@ -99,10 +101,14 @@ def daily_emissions_t(world: World) -> float:
     coal_mwh = s.today_summary_so_far.get("coal_kwh", 0.0) / 1000.0
     gas_mwh = s.today_summary_so_far.get("gas_kwh", 0.0) / 1000.0
     refined_bbl = s.today_summary_so_far.get("refined_bbl", 0.0)
-    n_industrial = sum(1 for t in s.tiles if t.type == "industrial" and t.operational)
+    industrial_flat_co2 = sum(
+        INDUSTRIAL_PROCESS_CO2_T_PER_DAY * workforce.efficiency(t)
+        for t in s.tiles
+        if t.type == "industrial" and t.operational
+    )
     return (
         coal_mwh * COAL_CO2_T_PER_MWH
         + gas_mwh * GAS_CO2_T_PER_MWH
-        + n_industrial * INDUSTRIAL_PROCESS_CO2_T_PER_DAY
+        + industrial_flat_co2
         + refined_bbl * REFINERY_CO2_PER_BBL
     )

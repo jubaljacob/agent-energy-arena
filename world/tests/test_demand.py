@@ -36,11 +36,14 @@ def _fresh_world() -> World:
     return w
 
 
-def _inject_tile(w: World, *, tile_type: str, x: int, y: int) -> None:
+def _inject_tile(
+    w: World, *, tile_type: str, x: int, y: int, staffed_jobs: int | None = None
+) -> None:
     """Bypass /build to plant a demand-bearing tile directly.
 
     Workforce slice 01: defaults ``staffed_jobs`` to ``spec.jobs`` so injected
-    producer tiles look fully staffed by the helper.
+    producer tiles look fully staffed by the helper. Slice 05 tests that want
+    partial / idle staffing pass ``staffed_jobs=N`` explicitly.
     """
     from world.catalog import TILE_CATALOG
 
@@ -55,7 +58,8 @@ def _inject_tile(w: World, *, tile_type: str, x: int, y: int) -> None:
             operational=True,
             housing_capacity=spec.housing_capacity,
             jobs=spec.jobs,
-            staffed_jobs=spec.jobs,
+            demand_kw=spec.demand_kw,
+            staffed_jobs=spec.jobs if staffed_jobs is None else staffed_jobs,
         )
     )
 
@@ -119,6 +123,47 @@ def test_commercial_demand_swings_with_factor() -> None:
     # 50 kW peak during 8-19h; 10 kW (20%) otherwise.
     assert total_demand_kw(w.state, 12) == pytest.approx(50.0)
     assert total_demand_kw(w.state, 0) == pytest.approx(10.0)
+
+
+# -- Workforce efficiency scales civilian demand (slice 05) -----------------
+
+
+def test_idle_commercial_draws_zero_demand() -> None:
+    """staffed_jobs=0 → efficiency=0 → no commercial contribution at any hour."""
+    w = _fresh_world()
+    _inject_tile(w, tile_type="commercial", x=5, y=5, staffed_jobs=0)
+    w.state.population = 0
+    for h in range(24):
+        assert total_demand_kw(w.state, h) == pytest.approx(0.0)
+
+
+def test_half_staffed_commercial_draws_half_peak() -> None:
+    """jobs=12 staffed=6 → efficiency=0.5 → 25 kW peak / 5 kW off-peak."""
+    w = _fresh_world()
+    _inject_tile(w, tile_type="commercial", x=5, y=5, staffed_jobs=6)
+    w.state.population = 0
+    # h=12 → commercial_factor=1.0 → 50 × 0.5 × 1.0 = 25 kW.
+    assert total_demand_kw(w.state, 12) == pytest.approx(25.0)
+    # h=22 → commercial_factor=0.2 → 50 × 0.5 × 0.2 = 5 kW.
+    assert total_demand_kw(w.state, 22) == pytest.approx(5.0)
+
+
+def test_idle_industrial_draws_zero_demand() -> None:
+    """staffed_jobs=0 → industrial drops out of total_demand_kw entirely."""
+    w = _fresh_world()
+    _inject_tile(w, tile_type="industrial", x=5, y=5, staffed_jobs=0)
+    w.state.population = 0
+    for h in (0, 6, 12, 18, 23):
+        assert total_demand_kw(w.state, h) == pytest.approx(0.0)
+
+
+def test_half_staffed_industrial_draws_half() -> None:
+    """jobs=30 staffed=15 → efficiency=0.5 → 150 kW continuous."""
+    w = _fresh_world()
+    _inject_tile(w, tile_type="industrial", x=5, y=5, staffed_jobs=15)
+    w.state.population = 0
+    for h in (0, 6, 12, 18, 23):
+        assert total_demand_kw(w.state, h) == pytest.approx(150.0)
 
 
 # -- Event multipliers (PRD split scope) -------------------------------------

@@ -21,6 +21,10 @@ class Tile:
     opex_per_day: float = 0.0
     housing_capacity: int = 0
     jobs: int = 0
+    # Catalog-snapshotted continuous demand (commercial + industrial loads).
+    # Read by power.py instead of TILE_CATALOG so catalog retunes do not change
+    # behaviour of already-built tiles.
+    demand_kw: float = 0.0
     # Workforce slice 01: hired headcount. Allocator fills/drains; defaults to
     # 0 until `world.workforce.hire_to_fill` runs.
     staffed_jobs: int = 0

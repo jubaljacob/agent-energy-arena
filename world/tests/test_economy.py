@@ -625,13 +625,20 @@ def test_co2_emitted_t_in_today_summary_so_far():
 
 
 def test_industrial_pays_flat_co2_even_when_no_grid():
-    """A standalone industrial tile (no plants serving it) still emits 2 t/day
-    flat — the term is independent of dispatch."""
+    """A fully-staffed industrial tile (no plants serving it) still emits 2 t/day
+    flat — the term is independent of grid dispatch. Slice 05 ties the term to
+    workforce efficiency, so the original ``pop=0`` setup would zero-staff and
+    drop the contribution. Manually staff to full and assert the flat term
+    arrives regardless of dispatch state."""
     w = World()
     w.reset(seed=42)
     th = next(t for t in w.state.tiles if t.type == "town_hall")
     w.build("industrial", th.x + 1, th.y)
     w.state.population = 0
+    # The /build hook auto-hires; pop=0 leaves the industrial at staffed=0.
+    # Force-staff to full so the flat CO2 term fires.
+    ind = next(t for t in w.state.tiles if t.type == "industrial")
+    ind.staffed_jobs = ind.jobs
     w.step(days=1)
     # No plants → no coal/gas kWh. Refinery=0. Only industrial × 2 t/day.
     assert w.state.today_summary_so_far["co2_emitted_t"] == pytest.approx(
@@ -639,6 +646,35 @@ def test_industrial_pays_flat_co2_even_when_no_grid():
     )
     assert w.state.today_summary_so_far["carbon_cost"] == pytest.approx(
         INDUSTRIAL_PROCESS_CO2_T_PER_DAY * w.state.carbon_price
+    )
+
+
+def test_idle_industrial_emits_zero_flat_co2():
+    """An industrial with staffed_jobs=0 contributes 0 t/day flat CO2."""
+    w = World()
+    w.reset(seed=42)
+    th = next(t for t in w.state.tiles if t.type == "town_hall")
+    w.build("industrial", th.x + 1, th.y)
+    w.state.population = 0
+    ind = next(t for t in w.state.tiles if t.type == "industrial")
+    ind.staffed_jobs = 0
+    w.step(days=1)
+    # No plants, no refinery, idle industrial → no CO2 anywhere.
+    assert w.state.today_summary_so_far["co2_emitted_t"] == pytest.approx(0.0)
+
+
+def test_half_staffed_industrial_emits_half_flat_co2():
+    """staffed_jobs=15 (jobs=30) → 1.0 t/day flat CO2 contribution."""
+    w = World()
+    w.reset(seed=42)
+    th = next(t for t in w.state.tiles if t.type == "town_hall")
+    w.build("industrial", th.x + 1, th.y)
+    w.state.population = 0
+    ind = next(t for t in w.state.tiles if t.type == "industrial")
+    ind.staffed_jobs = ind.jobs // 2  # 15 of 30
+    w.step(days=1)
+    assert w.state.today_summary_so_far["co2_emitted_t"] == pytest.approx(
+        INDUSTRIAL_PROCESS_CO2_T_PER_DAY * 0.5
     )
 
 

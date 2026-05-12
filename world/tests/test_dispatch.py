@@ -263,6 +263,7 @@ def _build_at(w: World, tile_type: str, x: int, y: int) -> Tile:
         opex_per_day=spec.opex_per_day,
         jobs=spec.jobs,
         staffed_jobs=spec.jobs,
+        demand_kw=spec.demand_kw,
     )
     w.state.tiles.append(tile)
     return tile

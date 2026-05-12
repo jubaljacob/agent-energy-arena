@@ -97,11 +97,11 @@ def demand_surprise_multiplier(state: WorldState) -> float:
 
 
 def _industrial_kw(state: WorldState) -> float:
-    return sum(TILE_CATALOG[t.type].demand_kw for t in state.tiles if t.type == "industrial")
+    return sum(t.demand_kw * workforce.efficiency(t) for t in state.tiles if t.type == "industrial")
 
 
 def _commercial_peak_kw(state: WorldState) -> float:
-    return sum(TILE_CATALOG[t.type].demand_kw for t in state.tiles if t.type == "commercial")
+    return sum(t.demand_kw * workforce.efficiency(t) for t in state.tiles if t.type == "commercial")
 
 
 def _process_loads_kw(state: WorldState) -> float:
