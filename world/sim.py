@@ -48,6 +48,7 @@ from world.state import Tile, Well, WorldState
 from world.subsurface import (
     CRUDE_PRICE_USD_PER_BBL,
     INJECTION_KWH_PER_BBL,
+    PRESSURE_BOOST_MAX,
     Q_MAX_WELL_BBL_DAY,
     WELL_SETPOINT_MAX,
     WELL_SETPOINT_MIN,
@@ -174,6 +175,8 @@ def _well_to_dict(w: Well, world: World) -> dict[str, Any]:
         "setpoint_rate_bbl_day": w.setpoint_rate_bbl_day,
         "current_rate_bbl_day": w.current_rate_bbl_day,
         "yesterday_rate_bbl_day": w.yesterday_rate_bbl_day,
+        "yesterday_inj_rate_bbl_day": w.yesterday_inj_rate_bbl_day,
+        "pressure_boost": w.pressure_boost,
         "cumulative_produced_bbl": w.cumulative_produced_bbl,
         "cumulative_injected_bbl": w.cumulative_injected_bbl,
         "capex_paid": w.capex_paid,
@@ -808,6 +811,14 @@ class World:
                     if cheb <= 1:
                         continue  # breakthrough gate
                     qualifying_inj_rate += iw.yesterday_rate_bbl_day
+            # oilfield-v2 slice 04: stamp the inputs/output of the rate-based
+            # pressure term on the producer so /state and the popup can report
+            # the same numbers fed into today's production calc.
+            well.yesterday_inj_rate_bbl_day = qualifying_inj_rate
+            well.pressure_boost = min(
+                PRESSURE_BOOST_MAX,
+                qualifying_inj_rate / max(well.yesterday_rate_bbl_day, 1.0),
+            )
             q = well_production_bbl_day(
                 self.subsurface,
                 well.x,

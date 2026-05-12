@@ -764,11 +764,23 @@
     const revenue = w.estimated_revenue_per_day || 0;
     const net = w.estimated_net_per_day || 0;
     const ncls = net > 0 ? "pos" : net < 0 ? "neg" : "";
+    const reservoirLabel =
+      w.reservoir_id === null || w.reservoir_id === undefined ? "—" : `R${w.reservoir_id}`;
+    rows.push(row("Reservoir", reservoirLabel));
     if (w.type === "production") {
+      const yProd = w.yesterday_rate_bbl_day || 0;
+      const yInj = w.yesterday_inj_rate_bbl_day || 0;
+      const boost = w.pressure_boost || 0;
+      const bcls = boost > 0 ? "pos" : "";
+      rows.push(row("Pressure boost", `${(boost * 100).toFixed(1)}%`, bcls));
+      rows.push(row("Yesterday prod rate", `${fmtNum(yProd, 1)} bbl/d`));
+      rows.push(row("Yesterday inj rate (qualifying)", `${fmtNum(yInj, 1)} bbl/d`));
       rows.push(row("Cumulative produced", `${fmtNum(w.cumulative_produced_bbl || 0)} bbl`, "pos"));
       rows.push(row("Gross crude value (est.) / day", fmtMoney(revenue), "pos"));
       rows.push(row("Net / day", fmtMoney(net), ncls));
     } else {
+      const yInj = w.yesterday_rate_bbl_day || 0;
+      rows.push(row("Yesterday inj rate", `${fmtNum(yInj, 1)} bbl/d`));
       const injKwh = w.injection_power_kwh_per_day || 0;
       rows.push(row("Injection load", `${fmtNum(injKwh / 24, 1)} kW avg`, "warn"));
       rows.push(row("Power consumed / day", `${fmtNum(injKwh)} kWh`, "warn"));

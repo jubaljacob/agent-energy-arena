@@ -73,6 +73,13 @@ class Well:
     # value to compute the rate-based pressure_boost. Day-0 / day-of-drill:
     # stays at 0 so a freshly-drilled well gets no boost on its first day.
     yesterday_rate_bbl_day: float = 0.0
+    # oilfield-v2 slice 04: read-only telemetry for producers. Stamped in
+    # the production loop of `_advance_one_day` with the values fed into
+    # today's `well_production_bbl_day` call so popup/state consumers can
+    # audit attribution without recomputing the reservoir/Chebyshev filter.
+    # Both stay at 0 on injection wells.
+    yesterday_inj_rate_bbl_day: float = 0.0
+    pressure_boost: float = 0.0
 
 
 @dataclass

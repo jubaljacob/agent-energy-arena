@@ -383,8 +383,91 @@ def test_state_wells_exposes_required_fields():
         "setpoint_rate_bbl_day",
         "current_rate_bbl_day",
         "cumulative_produced_bbl",
+        "yesterday_rate_bbl_day",
+        "yesterday_inj_rate_bbl_day",
+        "pressure_boost",
+        "reservoir_id",
     ):
         assert key in well
+
+
+# -- Rate-pressure observability (oilfield-v2 slice 04) --------------------
+
+
+def _setup_depleted_producer_world_for_observability() -> World:
+    """Mirror test_injection.py's pre-depleted seed-42 setup so the
+    rate-based pressure path is exercised over multiple steps."""
+    w = World()
+    w.reset(seed=42)
+    w.state.treasury = 10_000_000.0
+    w.build("coal_plant", 5, 5)
+    w.build("coal_plant", 6, 5)
+    hc = _hc_voxel(w)
+    for v in w.subsurface.voxels.values():
+        if abs(v.x - hc.x) <= 1 and abs(v.y - hc.y) <= 1 and abs(v.z - hc.z) <= 1:
+            v.oil_remaining_bbl = 0.05 * v.oil_in_place_bbl
+    return w
+
+
+def test_state_wells_reports_pressure_boost_for_same_reservoir_pair():
+    """Same-reservoir Chebyshev-2 producer/injector pair: after a few days
+    the producer's `pressure_boost` and `yesterday_inj_rate_bbl_day` in
+    `state_dict()` are consistent with the rate-based formula and the
+    injector's `yesterday_rate_bbl_day`."""
+    from world.subsurface import PRESSURE_BOOST_MAX
+
+    w = _setup_depleted_producer_world_for_observability()
+    hc = _hc_voxel(w)
+    w.drill(hc.x, hc.y, hc.z, "production")
+    prod_id = w.state.wells[-1].id
+    w.control_well(prod_id, Q_MAX_WELL_BBL_DAY)
+    # Same reservoir, Chebyshev 2 from the producer's target.
+    w.drill(hc.x, hc.y + 2, hc.z, "injection")
+    inj_id = w.state.wells[-1].id
+    w.control_well(inj_id, Q_MAX_WELL_BBL_DAY)
+    w.step(days=5)
+
+    s = w.state_dict()
+    prod = next(ww for ww in s["wells"] if ww["id"] == prod_id)
+    inj = next(ww for ww in s["wells"] if ww["id"] == inj_id)
+
+    # Same reservoir, distinct wells.
+    assert prod["reservoir_id"] is not None
+    assert inj["reservoir_id"] == prod["reservoir_id"]
+
+    # Injector's yesterday rate is the qualifying contribution; the
+    # producer's yesterday_inj_rate_bbl_day mirrors it exactly (only one
+    # qualifying injector).
+    assert prod["yesterday_inj_rate_bbl_day"] == pytest.approx(inj["yesterday_rate_bbl_day"])
+
+    # Boost matches the formula: min(cap, qual / max(prod_yest, 1)).
+    expected_boost = min(
+        PRESSURE_BOOST_MAX,
+        prod["yesterday_inj_rate_bbl_day"] / max(prod["yesterday_rate_bbl_day"], 1.0),
+    )
+    assert prod["pressure_boost"] == pytest.approx(expected_boost)
+    assert prod["pressure_boost"] > 0.0
+
+    # Injector rows still expose the read-only telemetry fields (both zero
+    # — `yesterday_inj_rate_bbl_day` and `pressure_boost` only carry
+    # meaning for producers).
+    assert inj["yesterday_inj_rate_bbl_day"] == 0.0
+    assert inj["pressure_boost"] == 0.0
+
+
+def test_state_wells_pressure_boost_zero_for_lone_producer():
+    """A producer with no injector reports `pressure_boost == 0` and
+    `yesterday_inj_rate_bbl_day == 0` after stepping the sim."""
+    w = _setup_depleted_producer_world_for_observability()
+    hc = _hc_voxel(w)
+    w.drill(hc.x, hc.y, hc.z, "production")
+    w.control_well(w.state.wells[-1].id, Q_MAX_WELL_BBL_DAY)
+    w.step(days=3)
+
+    s = w.state_dict()
+    prod = next(ww for ww in s["wells"] if ww["type"] == "production")
+    assert prod["yesterday_inj_rate_bbl_day"] == 0.0
+    assert prod["pressure_boost"] == 0.0
 
 
 # -- API smoke -------------------------------------------------------------
