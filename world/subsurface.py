@@ -424,6 +424,13 @@ def well_production_bbl_day(
     if V_init <= 0.0:
         return 0.0
     V_remain = sum(v.oil_remaining_bbl for v in pool)
+    # Invariant: a fully depleted pool produces nothing, even if a qualifying
+    # injector would otherwise lift `effective_fraction` via `pressure_boost`.
+    # Without this guard the drain loop short-circuits on `W = 0` but
+    # `q_actual` still flows into `cumulative_produced_bbl` — the well prints
+    # oil from a dead reservoir.
+    if V_remain <= 0.0:
+        return 0.0
     fraction = V_remain / V_init
     k_eff = sum(v.permeability for v in pool) / n_positions / PERM_NORMALIZATION_MD
     pressure_boost = min(

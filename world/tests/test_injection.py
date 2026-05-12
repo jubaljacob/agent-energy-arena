@@ -151,6 +151,46 @@ def test_pressure_boost_zero_when_qualifying_inj_rate_zero():
     assert q_default == pytest.approx(q_explicit)
 
 
+def test_depleted_pool_returns_zero_q_actual_with_injection():
+    """Bug fix (reservoir-scale slice 02): a fully drained pool
+    (`V_remain == 0`) must return `q_actual == 0.0` even when a
+    qualifying injector would otherwise lift `effective_fraction` via
+    `pressure_boost`. Without the guard, the producer prints oil from
+    a dead reservoir because `effective_fraction = 0 + 0.5 = 0.5`
+    keeps `q_potential > 0` while the per-voxel drain loop short-
+    circuits on `W = 0` — net effect: `cumulative_produced_bbl`
+    advances every day forever."""
+    grid = SubsurfaceGrid(width=10, height=10, depth=10)
+    grid.voxels[(5, 5, 5)] = _make_voxel(5, 5, 5, perm=1000.0, oil=1000.0)
+    voxel = grid.voxels[(5, 5, 5)]
+    voxel.oil_remaining_bbl = 0.0  # pool fully drained, V_remain == 0
+
+    q_actual_day1 = well_production_bbl_day(
+        grid,
+        5,
+        5,
+        5,
+        setpoint_rate_bbl_day=200.0,
+        qualifying_inj_rate_bbl_day=100.0,
+        producer_yesterday_rate_bbl_day=200.0,
+    )
+    assert q_actual_day1 == 0.0
+    # Voxel remaining stays at zero day-over-day.
+    assert voxel.oil_remaining_bbl == 0.0
+
+    q_actual_day2 = well_production_bbl_day(
+        grid,
+        5,
+        5,
+        5,
+        setpoint_rate_bbl_day=200.0,
+        qualifying_inj_rate_bbl_day=100.0,
+        producer_yesterday_rate_bbl_day=200.0,
+    )
+    assert q_actual_day2 == 0.0
+    assert voxel.oil_remaining_bbl == 0.0
+
+
 # -- /drill injection well -------------------------------------------------
 
 
