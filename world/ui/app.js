@@ -336,13 +336,16 @@
     }
     if (next !== "drill") {
       drillAnchor = null;
-      renderSubsurface();
     }
-    subSurveyBtn.classList.toggle("selected", next === "survey");
-    subDrillBtn.classList.toggle("selected", next === "drill");
+    if (subSurveyBtn) subSurveyBtn.classList.toggle("selected", next === "survey");
+    if (subDrillBtn) subDrillBtn.classList.toggle("selected", next === "drill");
     canvas.classList.toggle("crosshair", next === "survey" || next === "drill");
     refreshBuildHint();
     drawGrid();
+    // Subsurface widget is always on screen now (lives under the canvas in
+    // the Map tab); voxel-pickability + anchor highlight depend on `mode`
+    // and `drillAnchor`, so re-render unconditionally.
+    renderSubsurface();
   }
 
   function refreshBuildHint() {
@@ -414,18 +417,21 @@
     };
   }
 
-  // Subsurface tool palette wiring.
-  if (subSurveyBtn) {
-    subSurveyBtn.addEventListener("click", (ev) => {
-      // Clicking the size input should not toggle the mode.
-      if (ev.target.tagName === "INPUT") return;
-      setMode(mode === "survey" ? null : "survey");
-    });
-  }
-  if (subDrillBtn) {
-    subDrillBtn.addEventListener("click", (ev) => {
-      if (ev.target.tagName === "INPUT" || ev.target.tagName === "LABEL") return;
-      setMode(mode === "drill" ? null : "drill");
+  // Subsurface tool palette wiring — event delegation on the parent <ul> so
+  // clicks on any nested element (swatch, text, cost-preview span) route to
+  // the right mode toggle. The size input and well-type radios sit inside the
+  // <li>s; we ignore clicks on form controls so they keep their native
+  // behaviour (editing the number, picking a radio).
+  const subList = document.getElementById("sublist");
+  if (subList) {
+    subList.addEventListener("click", (ev) => {
+      const tag = ev.target.tagName;
+      if (tag === "INPUT" || tag === "LABEL") return;
+      const li = ev.target.closest("li.modeItem");
+      if (!li) return;
+      const target = li.dataset.mode;
+      if (target !== "survey" && target !== "drill") return;
+      setMode(mode === target ? null : target);
     });
   }
   if (surveySizeInput) {
@@ -449,15 +455,17 @@
     });
   }
 
-  // Modal wiring.
+  // Modal wiring. Default state in CSS is `display: none` on the bare
+  // `.modal-backdrop`; JS toggles a `.show` class to reveal. This survives
+  // any cache mix because the modal is hidden until explicitly opened.
   function hideModal() {
-    if (modal) modal.classList.add("hidden");
+    if (modal) modal.classList.remove("show");
     pendingDrill = null;
   }
   function showModal(bodyText, onConfirm) {
     if (!modal) return;
     modalBody.textContent = bodyText;
-    modal.classList.remove("hidden");
+    modal.classList.add("show");
     pendingDrill = onConfirm;
   }
   if (modalCancel) modalCancel.addEventListener("click", () => hideModal());
@@ -473,7 +481,7 @@
     if (ev.key !== "Escape") return;
     const tag = (ev.target && ev.target.tagName) || "";
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    if (modal && !modal.classList.contains("hidden")) {
+    if (modal && modal.classList.contains("show")) {
       hideModal();
       return;
     }
@@ -590,15 +598,18 @@
       if (body.ok) {
         const voxList = (body.result && body.result.voxels) || [];
         const nHc = voxList.filter((v) => (v.oil_estimate_bbl || 0) > 0).length;
-        showToast(`survey done — ${nHc} HC voxels revealed · click to open Subsurface tab`, "ok-bridge");
-        // Toast click opens Subsurface tab + jumps to slice=anchor_y.
+        showToast(`survey done — ${nHc} HC voxels revealed · click to view`, "ok-bridge");
+        // Toast click scrolls the subsurface widget into view + jumps to
+        // slice=anchor_y. The widget lives under the canvas in the Map tab
+        // so there's no tab to switch — just focus it.
         toastEl.onclick = () => {
-          activateSubsurfaceTab();
           if (subAxisEl) subAxisEl.value = "y";
           if (subSliceEl) {
             subSliceEl.value = String(y);
             renderSubsurface();
           }
+          const subPanel = document.getElementById("subsurfacepanel");
+          if (subPanel) subPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
           toastEl.className = "toast";
           toastEl.onclick = null;
         };
@@ -665,12 +676,6 @@
     }
   }
 
-  function activateSubsurfaceTab() {
-    for (const btn of tabButtons) btn.classList.toggle("active", btn.dataset.tab === "subsurface");
-    for (const p of tabPanels) p.classList.toggle("active", p.id === "tab-subsurface");
-    refreshRevealed().then(renderSubsurface);
-  }
-
   nextDayBtn.addEventListener("click", async () => {
     nextDayBtn.disabled = true;
     try {
@@ -689,32 +694,35 @@
   const tabButtons = document.querySelectorAll(".tab");
   const tabPanels = document.querySelectorAll(".tabpanel");
   for (const btn of tabButtons) {
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
       const target = btn.dataset.tab;
       for (const b of tabButtons) b.classList.toggle("active", b === btn);
       for (const p of tabPanels) p.classList.toggle("active", p.id === `tab-${target}`);
-      if (target === "subsurface") {
-        await refreshRevealed();
-        renderSubsurface();
-      }
     });
   }
 
   // Power tab rendering ---------------------------------------------------
   const chartEl = document.getElementById("powerchart");
   const plantListEl = document.getElementById("plantlist");
+  const marginEl = document.getElementById("power-margin");
 
-  function renderPowerChart(supply, demand) {
+  function renderPowerChart(preview, yesterday) {
     if (!chartEl) return;
     chartEl.innerHTML = "";
-    if (!supply || !demand || supply.length === 0) {
+    const pSupply = (preview && preview.supply_kw_by_hour) || [];
+    const pDemand = (preview && preview.demand_kw_by_hour) || [];
+    const ySupply = (yesterday && yesterday.supply) || [];
+    const yDemand = (yesterday && yesterday.demand) || [];
+    const haveProjection = pSupply.length > 0 && pDemand.length > 0;
+    const haveYesterday = ySupply.length > 0 && yDemand.length > 0;
+    if (!haveProjection && !haveYesterday) {
       const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
       t.setAttribute("x", "50%");
       t.setAttribute("y", "50%");
       t.setAttribute("fill", "#5a5d65");
       t.setAttribute("text-anchor", "middle");
       t.setAttribute("font-size", "12");
-      t.textContent = "no data — step a day to see hourly trace";
+      t.textContent = "no data";
       chartEl.appendChild(t);
       return;
     }
@@ -722,10 +730,12 @@
     const H = 200;
     const padX = 28;
     const padY = 8;
-    const maxY = Math.max(...supply, ...demand, 1) * 1.1;
-    const path = (series, color) => {
+    const allVals = [...pSupply, ...pDemand, ...ySupply, ...yDemand, 1];
+    const maxY = Math.max(...allVals) * 1.1;
+    const path = (series, color, dashed) => {
+      if (series.length === 0) return;
       const pts = series.map((v, i) => {
-        const x = padX + (i / (series.length - 1)) * (W - padX * 2);
+        const x = padX + (i / Math.max(1, series.length - 1)) * (W - padX * 2);
         const y = H - padY - (v / maxY) * (H - padY * 2);
         return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
       });
@@ -734,6 +744,7 @@
       p.setAttribute("stroke", color);
       p.setAttribute("stroke-width", "2");
       p.setAttribute("fill", "none");
+      if (dashed) p.setAttribute("stroke-dasharray", "4 3");
       chartEl.appendChild(p);
     };
     // Y-axis label (max).
@@ -744,8 +755,33 @@
     lbl.setAttribute("font-size", "10");
     lbl.textContent = `${Math.round(maxY)} kW`;
     chartEl.appendChild(lbl);
-    path(demand, "#ff7a59");
-    path(supply, "#4ea3ff");
+    // Yesterday underneath (dashed, dimmer); projection on top (solid).
+    path(yDemand, "#ff7a59", true);
+    path(ySupply, "#4ea3ff", true);
+    path(pDemand, "#ff7a59", false);
+    path(pSupply, "#4ea3ff", false);
+  }
+
+  function renderPowerMargin(preview) {
+    if (!marginEl) return;
+    if (!preview || !preview.demand_kw_by_hour || preview.demand_kw_by_hour.length === 0) {
+      marginEl.textContent = "";
+      marginEl.className = "power-margin";
+      return;
+    }
+    const peakD = preview.peak_demand_kw || 0;
+    const peakS = preview.peak_supply_kw || 0;
+    const margin = preview.min_reserve_margin || 0;
+    const pct = (margin * 100).toFixed(0);
+    let tone = "ok";
+    if (margin < 0) tone = "blackout";
+    else if (margin < 0.15) tone = "brownout";
+    else if (margin > 0.5) tone = "curtailment";
+    marginEl.className = `power-margin ${tone}`;
+    marginEl.innerHTML =
+      `<span class="pm-label">Worst-hour reserve</span>` +
+      `<span class="pm-val">${pct >= 0 ? "+" : ""}${pct}%</span>` +
+      `<span class="pm-sub">peak ${Math.round(peakD)} kW demand · ${Math.round(peakS)} kW supply</span>`;
   }
 
   function renderPlantList(allTiles) {
@@ -1186,26 +1222,47 @@
       const balanceState = (s.power_now && s.power_now.balance_state) || "—";
       els.balance.textContent = balanceState;
       els.balance.className = `balance-badge ${balanceState}`;
-      renderPowerChart(s.last_day_supply_kw_by_hour, s.last_day_demand_kw_by_hour);
+      renderPowerChart(
+        s.next_24h_preview,
+        {
+          supply: s.last_day_supply_kw_by_hour,
+          demand: s.last_day_demand_kw_by_hour,
+        }
+      );
+      renderPowerMargin(s.next_24h_preview);
       renderPlantList(tiles);
       renderWells();
       renderRefineries();
       renderFinance();
       renderEvents(s.day);
       drawGrid();
-      // Refresh revealed voxels lazily when the subsurface tab is visible.
-      const subPanel = document.getElementById("tab-subsurface");
-      if (subPanel && subPanel.classList.contains("active")) {
+      // The subsurface widget is always on screen; refresh only when the
+      // material inputs (revealed voxels, wells) actually changed, so the
+      // re-render doesn't tear down in-flight voxel-pick interactions.
+      const rr = s.reservoirs_revealed || {};
+      const revealedCount = rr.n_revealed_voxels || 0;
+      const wellsCount = wells.length;
+      const subsurfaceDirty =
+        revealedCount !== _lastRevealedCount
+        || wellsCount !== _lastWellsCount;
+      if (subsurfaceDirty) {
         await refreshRevealed();
         renderSubsurface();
+        _lastRevealedCount = revealedCount;
+        _lastWellsCount = wellsCount;
       }
     } catch (err) {
-      // Server may not be up yet during boot — keep polling.
+      // Server may not be up yet during boot; the next user action will retry.
     }
   }
 
+  let _lastRevealedCount = -1;
+  let _lastWellsCount = -1;
+
+  // No periodic `setInterval(tick)` — every mutating action (build,
+  // demolish, survey, drill, control, step) calls `tick()` itself, so the
+  // UI stays current without polling /state continuously.
   loadCatalog();
   drawGrid();
   tick();
-  setInterval(tick, 500);
 })();

@@ -37,19 +37,42 @@ main {
   justify-content: center;
   gap: 1rem;
 }
-#buildmenu {
-  width: 240px;
+
+/* Shared side-panel chrome (power / build / subsurface widgets). */
+.side-panel {
   background: #16181d;
   border: 1px solid #2a2d34;
   border-radius: 4px;
   padding: 0.75rem;
 }
-#buildmenu h2 {
+.side-panel h2 {
   margin: 0 0 0.5rem;
   font-size: 0.85rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: #8b8f9a;
+}
+
+/* Map tab — 3-column layout: power | canvas+subsurface | build menu. */
+#tab-map.active {
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1rem;
+}
+#powerpanel {
+  width: 280px;
+  max-height: calc(100vh - 8rem);
+  overflow-y: auto;
+}
+#canvascol {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+#buildmenu {
+  width: 240px;
+  max-height: calc(100vh - 8rem);
+  overflow-y: auto;
 }
 #buildlist { list-style: none; padding: 0; margin: 0; }
 .buildItem {
@@ -138,34 +161,64 @@ main {
 .tab.active { background: #1f2229; color: #e6e7ea; border-color: #2a2d34; }
 .tabpanel { display: none; }
 .tabpanel.active { display: flex; padding: 1rem; gap: 1rem; }
-#tab-map.active { align-items: flex-start; justify-content: center; }
-#tab-power.active { padding: 1rem 1.5rem; }
-#powerwrap { width: 720px; max-width: 100%; }
-#powerwrap h2 { font-size: 0.85rem; color: #8b8f9a; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+
+/* Power widget (lives in #powerpanel on Map tab). */
 #powerchart {
   width: 100%;
-  height: 240px;
+  height: 160px;
   background: #1a1c22;
   border: 1px solid #2a2d34;
   border-radius: 4px;
   margin-bottom: 0.5rem;
 }
-#powerlegend { font-size: 0.8rem; color: #8b8f9a; display: flex; gap: 1rem; margin-bottom: 1rem; }
+#powerlegend { font-size: 0.8rem; color: #8b8f9a; display: flex; flex-wrap: wrap; gap: 0.75rem 1rem; margin-bottom: 1rem; }
 .legend-item { display: inline-flex; gap: 0.4rem; align-items: center; }
-.legend-swatch { width: 12px; height: 4px; display: inline-block; border-radius: 2px; }
+.legend-swatch { width: 14px; height: 4px; display: inline-block; border-radius: 2px; }
+.legend-swatch.swatch-supply { background: #4ea3ff; }
+.legend-swatch.swatch-demand { background: #ff7a59; }
+.legend-swatch.legend-dashed {
+  background: transparent;
+  height: 0;
+  border-top: 2px dashed currentColor;
+}
+.legend-swatch.swatch-supply.legend-dashed { color: #4ea3ff; }
+.legend-swatch.swatch-demand.legend-dashed { color: #ff7a59; }
+/* Worst-hour reserve readout above the power chart. */
+.power-margin {
+  display: none;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0.25rem 0 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 4px;
+  background: #1a1c22;
+  border: 1px solid #2a2d34;
+  font-size: 0.8rem;
+  color: #c9cad0;
+}
+.power-margin.ok, .power-margin.brownout, .power-margin.blackout, .power-margin.curtailment {
+  display: flex;
+}
+.power-margin .pm-label { color: #8b8f9a; }
+.power-margin .pm-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.power-margin .pm-sub { color: #6e7280; margin-left: auto; font-size: 0.72rem; }
+.power-margin.ok .pm-val { color: #b0e8c8; }
+.power-margin.curtailment .pm-val { color: #a8d8ff; }
+.power-margin.brownout .pm-val { color: #f0d28e; }
+.power-margin.blackout .pm-val { color: #ffb0b0; }
 #plantlist { list-style: none; padding: 0; margin: 0.5rem 0 0; display: grid; gap: 0.4rem; }
-.plantrow { display: grid; grid-template-columns: 130px 1fr 80px; gap: 0.5rem; align-items: center; font-size: 0.8rem; }
-.plantrow .pl-name { color: #c9cad0; font-variant-numeric: tabular-nums; }
-.plantrow .pl-bar { background: #2a2d34; border-radius: 2px; height: 8px; overflow: hidden; }
+.plantrow { display: grid; grid-template-columns: 1fr 60px; gap: 0.4rem; align-items: center; font-size: 0.75rem; }
+.plantrow .pl-name { color: #c9cad0; font-variant-numeric: tabular-nums; grid-column: 1 / -1; }
+.plantrow .pl-bar { background: #2a2d34; border-radius: 2px; height: 8px; overflow: hidden; grid-column: 1; }
 .plantrow .pl-bar-fill { height: 100%; background: #4ea3ff; }
 .plantrow.solar_farm .pl-bar-fill { background: #f5d76e; }
 .plantrow.wind_turbine .pl-bar-fill { background: #6dd5ed; }
 .plantrow.coal_plant .pl-bar-fill { background: #c97676; }
 .plantrow.gas_peaker .pl-bar-fill { background: #d09bff; }
-.plantrow .pl-val { text-align: right; color: #8b8f9a; font-variant-numeric: tabular-nums; }
+.plantrow .pl-val { text-align: right; color: #8b8f9a; font-variant-numeric: tabular-nums; grid-column: 2; }
 
-#tab-subsurface.active { padding: 1rem 1.5rem; }
-#subwrap { width: 720px; max-width: 100%; }
+/* Subsurface widget (lives in #subsurfacepanel below the canvas on Map tab). */
+#subsurfacepanel { width: 640px; }
 #subcontrols {
   display: flex;
   align-items: center;
@@ -288,7 +341,7 @@ main {
 .finance-row.neutral .finance-value { color: #8b8f9a; }
 .finance-label { color: #c9cad0; }
 
-/* Issue 21: Subsurface tools palette + drill modal + hatching */
+/* Subsurface tools palette (lives in #buildmenu on Map tab). */
 .palette-sep {
   margin: 1rem 0 0.5rem !important;
 }
@@ -323,17 +376,21 @@ main {
 #survey-cost-preview { color: #d4a72c; font-variant-numeric: tabular-nums; }
 #grid.crosshair { cursor: crosshair; }
 
-/* Confirm modal */
+/* Confirm modal — hidden by default. JS adds `.show` to reveal.
+   Starting state is `display: none` so any cache mix of HTML+CSS+JS still
+   renders the modal as hidden on load. */
 .modal-backdrop {
-  position: absolute;
+  display: none;
+  position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
+  z-index: 100;
+}
+.modal-backdrop.show {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 20;
 }
-.modal-backdrop.hidden { display: none; }
 .modal {
   background: #16181d;
   border: 1px solid #393d46;

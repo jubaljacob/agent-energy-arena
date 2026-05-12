@@ -751,6 +751,8 @@ class World:
     # -- Read-models -------------------------------------------------------
 
     def state_dict(self) -> dict[str, Any]:
+        from world.preview import preview_next_day
+
         s = self.state
         c = self.config
         return {
@@ -786,6 +788,7 @@ class World:
             "last_day_supply_kw_by_hour": list(s.last_day_supply_kw_by_hour),
             "last_day_demand_kw_by_hour": list(s.last_day_demand_kw_by_hour),
             "last_day_balance_state_by_hour": list(s.last_day_balance_state_by_hour),
+            "next_24h_preview": preview_next_day(self),
             "today_summary_so_far": s.today_summary_so_far,
             "cumulative_renewable_served_kwh": s.cumulative_renewable_served_kwh,
             "cumulative_total_served_kwh": s.cumulative_total_served_kwh,

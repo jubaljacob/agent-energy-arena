@@ -16,17 +16,67 @@
   </header>
   <nav id="tabs">
     <button class="tab active" data-tab="map">Map</button>
-    <button class="tab" data-tab="power">Power</button>
-    <button class="tab" data-tab="subsurface">Subsurface</button>
     <button class="tab" data-tab="wells">Wells</button>
     <button class="tab" data-tab="events">Events</button>
   </nav>
   <main>
     <section id="tab-map" class="tabpanel active">
-      <aside id="buildmenu">
-        <h2>Build</h2>
-        <ul id="buildlist"></ul>
-        <h2 class="palette-sep">Subsurface tools</h2>
+      <aside id="powerpanel" class="side-panel">
+        <h2>Supply vs demand — next 24h (projected)</h2>
+        <div id="power-margin" class="power-margin"></div>
+        <svg id="powerchart" viewBox="0 0 480 200" preserveAspectRatio="none"></svg>
+        <div id="powerlegend">
+          <span class="legend-item"><span class="legend-swatch swatch-supply"></span>Supply (proj.)</span>
+          <span class="legend-item"><span class="legend-swatch swatch-demand"></span>Demand (proj.)</span>
+          <span class="legend-item"><span class="legend-swatch swatch-supply legend-dashed"></span>Supply (yesterday)</span>
+          <span class="legend-item"><span class="legend-swatch swatch-demand legend-dashed"></span>Demand (yesterday)</span>
+        </div>
+        <h2>Plants — current output</h2>
+        <ul id="plantlist"></ul>
+      </aside>
+      <div id="canvascol">
+        <div id="canvasrow">
+          <canvas id="grid" width="640" height="640"></canvas>
+          <div id="toast" class="toast"></div>
+        </div>
+        <div id="subsurfacepanel" class="side-panel">
+          <div id="subcontrols">
+            <label>Axis
+              <select id="sub-axis">
+                <option value="x">X (slice fixes x)</option>
+                <option value="y" selected>Y (slice fixes y)</option>
+              </select>
+            </label>
+            <label>Slice
+              <input id="sub-slice" type="number" min="0" max="31" value="16" />
+            </label>
+            <div id="sub-stats" class="sub-stats">—</div>
+          </div>
+          <div id="subview">
+            <svg id="subchart" viewBox="0 0 640 320" preserveAspectRatio="xMidYMid meet"></svg>
+          </div>
+          <div id="sublegend">
+            <span class="legend-item">
+              <span class="legend-swatch sub-revealed-swatch"></span>
+              Revealed (color = oil estimate)
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch sub-unrevealed-swatch"></span>
+              Unrevealed (outline)
+            </span>
+          </div>
+          <p class="sub-hint">
+            Survey → Drill flow: pick <b>Survey</b> in the right rail, click the map to
+            reveal an N×N column at all depths. Then pick <b>Drill</b>, click a revealed
+            voxel here to lock its <code>(x, y, target_z)</code>, and click the same
+            surface tile on the canvas to fire <code>POST /drill</code>. Resurveys add
+            independent noise samples. ▼ = production well, ▲ = injection well.
+          </p>
+          <p id="sub-target" class="sub-hint sub-target hidden"></p>
+        </div>
+      </div>
+      <aside id="buildmenu" class="side-panel">
+        <h2>Subsurface tools</h2>
         <ul id="sublist">
           <li id="mode-survey" class="modeItem" data-mode="survey">
             <span class="swatch sub-survey-swatch"></span>
@@ -44,7 +94,7 @@
             <span class="swatch sub-drill-swatch"></span>
             <div class="bi-text">
               <div class="bi-name">Drill</div>
-              <div class="bi-desc">Pick voxel in Subsurface tab, then click canvas.</div>
+              <div class="bi-desc">Pick voxel in the cross-section below, then click canvas.</div>
               <div class="bi-cost">
                 <label><input type="radio" name="drill-type" value="production" checked /> production</label>
                 <label><input type="radio" name="drill-type" value="injection" /> injection</label>
@@ -52,59 +102,10 @@
             </div>
           </li>
         </ul>
+        <h2 class="palette-sep">Build</h2>
+        <ul id="buildlist"></ul>
         <p id="buildhint">Click a tile type, then click the grid. Right-click a tile to demolish.</p>
       </aside>
-      <div id="canvasrow">
-        <canvas id="grid" width="640" height="640"></canvas>
-        <div id="toast" class="toast"></div>
-        <div id="modal" class="modal-backdrop hidden">
-          <div class="modal">
-            <h3 id="modal-title">Drill possibly-empty rock?</h3>
-            <p id="modal-body"></p>
-            <div class="modal-actions">
-              <button id="modal-cancel">Cancel</button>
-              <button id="modal-confirm" class="primary">Drill anyway</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-    <section id="tab-subsurface" class="tabpanel">
-      <div id="subwrap">
-        <div id="subcontrols">
-          <label>Axis
-            <select id="sub-axis">
-              <option value="x">X (slice fixes x)</option>
-              <option value="y" selected>Y (slice fixes y)</option>
-            </select>
-          </label>
-          <label>Slice
-            <input id="sub-slice" type="number" min="0" max="31" value="16" />
-          </label>
-          <div id="sub-stats" class="sub-stats">—</div>
-        </div>
-        <div id="subview">
-          <svg id="subchart" viewBox="0 0 640 320" preserveAspectRatio="xMidYMid meet"></svg>
-        </div>
-        <div id="sublegend">
-          <span class="legend-item">
-            <span class="legend-swatch sub-revealed-swatch"></span>
-            Revealed (color = oil estimate)
-          </span>
-          <span class="legend-item">
-            <span class="legend-swatch sub-unrevealed-swatch"></span>
-            Unrevealed (outline)
-          </span>
-        </div>
-        <p class="sub-hint">
-          Survey → Drill flow: pick <b>Survey</b> in the left rail, click the map to
-          reveal an N×N column at all depths. Then pick <b>Drill</b>, click a revealed
-          voxel here to lock its <code>(x, y, target_z)</code>, and click the same
-          surface tile on the Map tab to fire <code>POST /drill</code>. Resurveys add
-          independent noise samples. ▼ = production well, ▲ = injection well.
-        </p>
-        <p id="sub-target" class="sub-hint sub-target hidden"></p>
-      </div>
     </section>
     <section id="tab-wells" class="tabpanel">
       <div id="wellswrap">
@@ -124,8 +125,8 @@
         </table>
         <p class="wells-hint">
           Drill production wells via <code>POST /drill</code>; surveyed
-          reservoirs (Subsurface tab) show the best targets. Setpoint slider
-          calls <code>POST /control/well</code>.
+          reservoirs (cross-section below the map) show the best targets.
+          Setpoint slider calls <code>POST /control/well</code>.
         </p>
         <h2>Refineries</h2>
         <div id="refineries-stats" class="wells-stats">—</div>
@@ -179,19 +180,17 @@
         </p>
       </div>
     </section>
-    <section id="tab-power" class="tabpanel">
-      <div id="powerwrap">
-        <h2>Yesterday — supply vs demand</h2>
-        <svg id="powerchart" viewBox="0 0 480 200" preserveAspectRatio="none"></svg>
-        <div id="powerlegend">
-          <span class="legend-item"><span class="legend-swatch" style="background:#4ea3ff"></span>Supply</span>
-          <span class="legend-item"><span class="legend-swatch" style="background:#ff7a59"></span>Demand</span>
-        </div>
-        <h2>Plants — current output</h2>
-        <ul id="plantlist"></ul>
-      </div>
-    </section>
   </main>
+  <div id="modal" class="modal-backdrop">
+    <div class="modal">
+      <h3 id="modal-title">Drill possibly-empty rock?</h3>
+      <p id="modal-body"></p>
+      <div class="modal-actions">
+        <button id="modal-cancel">Cancel</button>
+        <button id="modal-confirm" class="primary">Drill anyway</button>
+      </div>
+    </div>
+  </div>
   <script src="/ui/app.js"></script>
 </body>
 </html>
