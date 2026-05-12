@@ -43,8 +43,13 @@ COAL_DEMOLISH_CARBON_USD: float = 80.0
 DRILL_OIL_THRESHOLD_BBL: float = 5_000.0
 DRILL_PERM_THRESHOLD_MD: float = 200.0
 WELL_RATE_BBL_DAY: float = 160.0
-INJECTION_RATE_BBL_DAY: float = 100.0
+# oilfield-v2 §"Rate-based pressure": pressure_boost = qualifying_inj_rate /
+# producer_yesterday_rate, capped at 0.5. Setting injector setpoint == producer
+# setpoint gets us up to the 0.5 cap once flows steady out.
+INJECTION_RATE_BBL_DAY: float = 160.0
 REFINERY_RATE_BBL_DAY: float = 400.0
+# oilfield-v2 slice 06: cheapest legal survey column is size 4 ($15k).
+SURVEY_SIZE: int = 4
 
 
 class ScriptedAgent(BaseAgent):
@@ -189,7 +194,7 @@ class ScriptedAgent(BaseAgent):
             and treasury >= 20_000
         ):
             sx, sy = self._next_survey_anchor(cx, cy, w, h)
-            r = self.api.survey(sx, sy, 8)
+            r = self.api.survey(sx, sy, SURVEY_SIZE)
             if r.get("ok"):
                 self._last_survey_day = day
                 self._survey_seq += 1
@@ -205,6 +210,12 @@ class ScriptedAgent(BaseAgent):
                 if r.get("ok"):
                     well_id = r["result"]["id"]
                     self.api.control_well(well_id, WELL_RATE_BBL_DAY)
+                    occupied.add((cx_, cy_))
+                    # Lay pipeline producer→nearest existing refinery so the
+                    # well isn't an orphan (raw $40/bbl). If no refinery yet,
+                    # the refinery-build branch below lays pipelines to all
+                    # producers when it fires.
+                    self._lay_pipeline_to_refinery(cx_, cy_, tiles, occupied, w, h)
                     return
 
         # ----- Capacity: housing first, then commercial/industrial ---------
@@ -268,21 +279,44 @@ class ScriptedAgent(BaseAgent):
         ):
             # Set throughput. Refinery id is the last-built tile id of type refinery.
             latest = self.api.state()
+            refinery_xy: tuple[int, int] | None = None
             for t in latest["tiles"]:
                 if t["type"] == "refinery":
                     self.api.control_refinery(t["id"], REFINERY_RATE_BBL_DAY)
+                    refinery_xy = (int(t["x"]), int(t["y"]))
                     break
+            # Refinery just landed: lay pipeline from each existing producer
+            # to it so prior orphans (issue 10 AC: "queues the path as part
+            # of the refinery-build flow") get connected.
+            if refinery_xy is not None:
+                latest_occupied = {(t["x"], t["y"]) for t in latest["tiles"]}
+                latest_occupied |= {(w_["x"], w_["y"]) for w_ in latest["wells"]}
+                for w_ in latest["wells"]:
+                    if w_["type"] != "production":
+                        continue
+                    self._lay_pipeline_to_refinery(
+                        int(w_["x"]),
+                        int(w_["y"]),
+                        latest["tiles"],
+                        latest_occupied,
+                        w,
+                        h,
+                        refinery_xy=refinery_xy,
+                    )
             return
 
-        # ----- DR-injection well next to a solar farm ----------------------
+        # ----- DR-injection well in same reservoir as a producer ----------
+        # oilfield-v2 §"Rate-based pressure": injector qualifies for the
+        # producer's pressure_boost iff same `reservoir_id` AND Chebyshev
+        # distance > 1. We site at distance ≥ 2 (just past the breakthrough
+        # gate) so the boost lands on day 1.
         if (
             phase in ("diversify", "mature", "late")
             and n_inj_wells == 0
             and n_prod_wells >= 1
-            and n_solar >= 2
             and treasury >= 30_000
         ):
-            self._drill_injection_near_solar(tiles, wells, candidates, occupied, w, h)
+            self._drill_injection_same_reservoir(wells, candidates, occupied, w, h)
 
     # -- Helpers ----------------------------------------------------------
 
@@ -419,8 +453,9 @@ class ScriptedAgent(BaseAgent):
 
         Reservoirs are placed near the periphery on most seeds, so the
         sweep starts at center then jumps to the four corners + four
-        edge-midpoints before tightening. Each anchor is clamped 4 tiles
-        inside the boundary so the size-8 survey column stays in-grid."""
+        edge-midpoints before tightening. Each anchor is clamped 2 tiles
+        inside the boundary so the size-4 survey column (centered at the
+        anchor; spans [x-2, x+2)) stays in-grid."""
         offsets = [
             (0, 0),  # center first
             (-12, -12),
@@ -446,7 +481,7 @@ class ScriptedAgent(BaseAgent):
         ]
         idx = self._survey_seq % len(offsets)
         dx, dy = offsets[idx]
-        return max(4, min(w - 5, cx + dx)), max(4, min(h - 5, cy + dy))
+        return max(2, min(w - 3, cx + dx)), max(2, min(h - 3, cy + dy))
 
     def _pick_drill_target(
         self,
@@ -467,36 +502,91 @@ class ScriptedAgent(BaseAgent):
             return x, y, z
         return None
 
-    def _drill_injection_near_solar(
+    def _lay_pipeline_to_refinery(
         self,
+        wx: int,
+        wy: int,
         tiles: list[dict[str, Any]],
+        occupied: set[tuple[int, int]],
+        w: int,
+        h: int,
+        *,
+        refinery_xy: tuple[int, int] | None = None,
+    ) -> None:
+        """Build a 4-connected pipeline path from the well at (wx, wy) to the
+        nearest refinery. Path is L-shaped: walk x then y (or y then x —
+        whichever has the most existing pipeline overlap, deterministic
+        tiebreak: x-first). Endpoints are skipped (well + refinery occupy
+        them); pipelines must only be orthogonally adjacent, not on top of,
+        the producer/refinery — and `routing_units` only requires one
+        pipeline neighbour per facility for membership.
+
+        No-op if no refinery exists, or if `treasury` runs out mid-build
+        (insufficient_funds is the API-level signal; we stop on first
+        rejection of that kind)."""
+        if refinery_xy is None:
+            refineries = [t for t in tiles if t["type"] == "refinery"]
+            if not refineries:
+                return
+            refineries.sort(key=lambda t: abs(int(t["x"]) - wx) + abs(int(t["y"]) - wy))
+            refinery_xy = (int(refineries[0]["x"]), int(refineries[0]["y"]))
+        rx, ry = refinery_xy
+
+        path = _l_path((wx, wy), (rx, ry))
+        for px, py in path:
+            if (px, py) in occupied:
+                continue
+            if not _in_bounds(px, py, w, h):
+                continue
+            r = self.api.build("pipeline", px, py)
+            if r.get("ok"):
+                occupied.add((px, py))
+            elif r.get("error") == "insufficient_funds":
+                return
+
+    def _drill_injection_same_reservoir(
+        self,
         wells: list[dict[str, Any]],
         candidates: list[dict[str, Any]],
         occupied: set[tuple[int, int]],
         w: int,
         h: int,
     ) -> None:
-        """Place an injection well next to a producing well's pool (so pressure
-        boost lands) AND adjacent to a solar farm (so curtailment-DR has
-        somewhere to dump renewables)."""
-        prods = [w_ for w_ in wells if w_["type"] == "production"]
-        solars = [t for t in tiles if t["type"] == "solar_farm"]
-        if not prods or not solars:
+        """Place an injection well in the same `reservoir_id` as an existing
+        producer, at Chebyshev distance ≥ 2 from that producer's target.
+
+        Per AC: read `reservoir_id` from `/state.wells` (do not recompute
+        connectivity client-side); read candidate voxels' `reservoir_id`
+        from `/state.reservoirs_revealed.top_k` (the surveyor exposes the
+        per-voxel tag there). Setpoint matches WELL_RATE_BBL_DAY so the
+        producer's `pressure_boost` is achievable up to its 0.5 cap."""
+        producers = [w_ for w_ in wells if w_["type"] == "production"]
+        if not producers:
             return
-        target_well = prods[0]
-        for v in candidates:
-            x, y, z = int(v["x"]), int(v["y"]), int(v["z"])
-            if (x, y) in occupied or not _in_bounds(x, y, w, h):
+        # Iterate producers in id order (creation order) so the placement is
+        # deterministic across runs.
+        for prod in producers:
+            prod_rid = prod.get("reservoir_id")
+            if prod_rid is None:
                 continue
-            # Within 2 of the production well's (x, y, z) → pools intersect
-            if abs(x - target_well["x"]) > 2 or abs(y - target_well["y"]) > 2:
-                continue
-            if abs(z - int(target_well["target_z"])) > 2:
-                continue
-            r = self.api.drill(x, y, z, "injection")
-            if r.get("ok"):
-                self.api.control_well(r["result"]["id"], INJECTION_RATE_BBL_DAY)
-                return
+            for v in candidates:
+                x, y, z = int(v["x"]), int(v["y"]), int(v["z"])
+                vrid = v.get("reservoir_id")
+                if vrid is None or vrid != prod_rid:
+                    continue
+                if (x, y) in occupied or not _in_bounds(x, y, w, h):
+                    continue
+                cheb = max(
+                    abs(x - int(prod["x"])),
+                    abs(y - int(prod["y"])),
+                    abs(z - int(prod["target_z"])),
+                )
+                if cheb < 2:
+                    continue  # breakthrough gate (sim treats <=1 as breakthrough)
+                r = self.api.drill(x, y, z, "injection")
+                if r.get("ok"):
+                    self.api.control_well(r["result"]["id"], INJECTION_RATE_BBL_DAY)
+                    return
 
 
 # --- Geometry helpers -------------------------------------------------------
@@ -504,6 +594,41 @@ class ScriptedAgent(BaseAgent):
 
 def _in_bounds(x: int, y: int, w: int, h: int) -> bool:
     return 0 <= x < w and 0 <= y < h
+
+
+def _l_path(a: tuple[int, int], b: tuple[int, int]) -> list[tuple[int, int]]:
+    """L-shaped 4-connected walk from `a` exclusive to `b` exclusive.
+
+    Walk x-first (along ay) then y-first (along bx); output the cells
+    strictly between the two endpoints (so neither `a` nor `b` is in the
+    list — they're occupied by the well + refinery). Path is contiguous
+    4-connected, includes the corner at (bx, ay) when the corner is not
+    `a` and not `b`."""
+    ax, ay = a
+    bx, by = b
+    out: list[tuple[int, int]] = []
+    if ax != bx:
+        sx = 1 if bx > ax else -1
+        x = ax + sx
+        while True:
+            if (x, ay) == b:
+                break
+            out.append((x, ay))
+            if x == bx:
+                break
+            x += sx
+    if ay != by:
+        sy = 1 if by > ay else -1
+        y = ay + sy
+        while True:
+            if (bx, y) == b:
+                break
+            if (bx, y) != a:
+                out.append((bx, y))
+            if y == by:
+                break
+            y += sy
+    return out
 
 
 def _spiral(cx: int, cy: int, w: int, h: int) -> list[tuple[int, int]]:
