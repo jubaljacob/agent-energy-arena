@@ -30,6 +30,8 @@ def _inject_tile(
     jobs: int = 0,
     housing_capacity: int = 0,
     staffed_jobs: int | None = None,
+    built_day: int = 0,
+    operational: bool = True,
 ) -> None:
     """Bypass /build's adjacency/funds checks to set up arbitrary aggregates.
 
@@ -43,8 +45,8 @@ def _inject_tile(
             type=type,
             x=x,
             y=y,
-            built_day=0,
-            operational=True,
+            built_day=built_day,
+            operational=operational,
             jobs=jobs,
             housing_capacity=housing_capacity,
             staffed_jobs=jobs if staffed_jobs is None else staffed_jobs,
@@ -340,3 +342,193 @@ def test_step_size_invariance_with_population_dynamics():
     assert a.state.population == b.state.population
     assert a.state.happiness == b.state.happiness
     assert a.sim_rng.standard_normal() == b.sim_rng.standard_normal()
+
+
+# -- Workforce wiring (slice 02) --------------------------------------------
+
+
+def _find_tile(w: World, type: str) -> Tile:
+    for t in w.state.tiles:
+        if t.type == type:
+            return t
+    raise AssertionError(f"no {type} tile in world")
+
+
+def test_growth_branch_hires_into_open_vacancies_oldest_first():
+    """Growth branch → ``hire_to_fill`` auto-fills the unemployed pool."""
+    w = _fresh_world()
+    # Town hall (day 0) is already 30/30. Older industrial fully staffed,
+    # younger industrial with 30 open vacancies. Plenty of capacity + jobs.
+    _inject_tile(w, type="industrial", x=2, y=2, jobs=30, built_day=1)
+    _inject_tile(w, type="industrial", x=3, y=3, jobs=30, staffed_jobs=0, built_day=2)
+    _inject_tile(w, type="house", x=4, y=4, housing_capacity=200)
+    w.state.population = 84  # employed = 30+30 = 60, unemployed = 24
+
+    update_population(w)
+
+    # growth = 0.012 * 84 * 1.0 = 1.008 → +1. New pop = 85.
+    assert w.state.population == 85
+    # Unemployed post-growth = 85 - 60 = 25. The younger industrial (day 2)
+    # absorbs all 25 since the older industrial (day 1) is already full.
+    older = w.state.tiles[1]
+    younger = w.state.tiles[2]
+    assert older.staffed_jobs == 30  # day 1, untouched
+    assert younger.staffed_jobs == 25  # day 2, filled oldest-first
+
+
+def test_exodus_branch_fires_newest_when_unemployed_is_zero():
+    """capacity < pop → drain via ``drain_n``; with unemployed=0 the newest
+    producer loses staff."""
+    w = _fresh_world()
+    # Shrink town hall housing so capacity drops below pop.
+    town_hall = _find_tile(w, "town_hall")
+    town_hall.housing_capacity = 50
+    _inject_tile(w, type="industrial", x=2, y=2, jobs=30, built_day=1)
+    w.state.population = 60  # employed = 30 + 30 = 60, unemployed = 0
+
+    update_population(w)
+
+    # max(50, 60-5) = 55 → delta = 5. All 5 fire newest-first = industrial.
+    assert w.state.population == 55
+    industrial = w.state.tiles[1]
+    assert industrial.staffed_jobs == 25
+    assert town_hall.staffed_jobs == 30
+
+
+def test_exodus_branch_drains_unemployed_first_when_buffer_exists():
+    """capacity < pop with unemployed buffer → no producer fires."""
+    w = _fresh_world()
+    town_hall = _find_tile(w, "town_hall")
+    town_hall.housing_capacity = 50
+    _inject_tile(w, type="industrial", x=2, y=2, jobs=30, built_day=1)
+    _inject_tile(w, type="house", x=4, y=4, housing_capacity=20)
+    # employed = 30 + 30 = 60, unemployed = 20, capacity = 50+20 = 70
+    w.state.population = 80
+
+    update_population(w)
+
+    # max(70, 80-5) = 75 → delta = 5. All 5 from unemployed; staffing untouched.
+    assert w.state.population == 75
+    assert town_hall.staffed_jobs == 30
+    assert w.state.tiles[1].staffed_jobs == 30
+
+
+def test_job_decline_branch_drains_unemployed_silently():
+    """jobs < 0.7 × pop → drain comes from the unemployed pool."""
+    w = _fresh_world()
+    # Only the town hall (jobs=30). pop=100. unemployed=70.
+    w.state.population = 100
+
+    update_population(w)
+
+    # max(30/0.7=42.86, 99) = 99 → delta = 1. Drained from unemployed.
+    assert w.state.population == 99
+    town_hall = _find_tile(w, "town_hall")
+    assert town_hall.staffed_jobs == 30
+
+
+def test_happiness_decline_branch_fires_newest_when_unemployed_zero():
+    """happiness < 0.5 → drain via ``drain_n``; newest producer loses staff."""
+    w = _fresh_world()
+    _inject_tile(w, type="industrial", x=2, y=2, jobs=30, built_day=1)
+    w.state.population = 60  # employed = 60, unemployed = 0
+    # 12h blackout → happiness = 1 - 0.05*12 = 0.4 < 0.5
+    w.state.yesterday_blackout_hours = 12.0
+
+    update_population(w)
+
+    assert w.state.happiness < 0.5
+    # 60 * 0.99 = 59.4 → 59. delta=1. Newest = industrial.
+    assert w.state.population == 59
+    industrial = w.state.tiles[1]
+    town_hall = _find_tile(w, "town_hall")
+    assert industrial.staffed_jobs == 29
+    assert town_hall.staffed_jobs == 30
+
+
+def test_drain_fires_newest_producer_first_with_multiple_young_producers():
+    """Fire order respects ``(creation_day, id_string)`` ascending, drained
+    in reverse — the youngest producer loses staff first."""
+    w = _fresh_world()
+    town_hall = _find_tile(w, "town_hall")
+    town_hall.housing_capacity = 50  # force exodus
+    _inject_tile(w, type="coal_plant", x=2, y=2, jobs=8, built_day=5)
+    _inject_tile(w, type="industrial", x=3, y=3, jobs=30, built_day=10)
+    _inject_tile(w, type="refinery", x=4, y=4, jobs=25, staffed_jobs=22, built_day=15)
+    # employed = 30+8+30+22 = 90, unemployed = 0
+    w.state.population = 90
+
+    update_population(w)
+
+    # max(50, 85) = 85 → delta = 5. All 5 come from refinery (newest, day 15).
+    assert w.state.population == 85
+    refinery = w.state.tiles[3]
+    industrial = w.state.tiles[2]
+    coal_plant = w.state.tiles[1]
+    assert refinery.staffed_jobs == 17
+    assert industrial.staffed_jobs == 30  # untouched
+    assert coal_plant.staffed_jobs == 8  # untouched
+    assert town_hall.staffed_jobs == 30  # untouched
+
+
+def test_mixed_drain_drains_unemployed_then_fires_newest():
+    """Drain order: unemployed pool first, then newest producer."""
+    w = _fresh_world()
+    town_hall = _find_tile(w, "town_hall")
+    town_hall.housing_capacity = 50  # force exodus
+    _inject_tile(w, type="industrial", x=2, y=2, jobs=30, built_day=1)
+    # employed = 30+30 = 60. population = 65 → unemployed = 5.
+    w.state.population = 65
+
+    update_population(w)
+
+    # max(50, 60) = 60 → delta = 5. Take all 5 from unemployed; staffing intact.
+    assert w.state.population == 60
+    assert w.state.tiles[1].staffed_jobs == 30
+    assert town_hall.staffed_jobs == 30
+
+    # Run again: cap still 50, pop=60 → max(50, 55) = 55 → delta=5.
+    # Unemployed = 60-60 = 0, so all 5 fire from industrial (newest).
+    update_population(w)
+    assert w.state.population == 55
+    assert w.state.tiles[1].staffed_jobs == 25
+    assert town_hall.staffed_jobs == 30
+
+
+def test_tax_base_uses_post_drain_population_not_employed():
+    """Tax = $4 × state.population (post-drain), not $4 × employed."""
+    w = _fresh_world()
+    town_hall = _find_tile(w, "town_hall")
+    town_hall.housing_capacity = 50  # force exodus
+    _inject_tile(w, type="industrial", x=2, y=2, jobs=30, built_day=1)
+    w.state.population = 100  # employed=60, unemployed=40
+    treasury_before = w.state.treasury
+
+    update_population(w)
+
+    # max(50, 95) = 95 → delta=5. Drained from unemployed.
+    assert w.state.population == 95
+    # Tax = $4 × 95 = $380; NOT $4 × 60 = $240.
+    assert w.state.today_summary_so_far["tax_revenue"] == pytest.approx(380.0)
+    assert w.state.treasury == pytest.approx(treasury_before + 380.0)
+
+
+def test_failed_plant_still_drained_by_workforce():
+    """Non-operational plants stay in ``producers`` — they can lose workers."""
+    w = _fresh_world()
+    _inject_tile(w, type="coal_plant", x=2, y=2, jobs=8, built_day=1, operational=False)
+    # employed = 30+8 = 38, unemployed = 0
+    w.state.population = 38
+    w.state.yesterday_blackout_hours = 12.0  # happiness 0.4 < 0.5
+
+    update_population(w)
+
+    # 38 * 0.99 = 37.62 → 37. delta=1.
+    # Newest producer is the failed coal plant; it loses 1 worker even
+    # though operational=False.
+    assert w.state.population == 37
+    coal_plant = w.state.tiles[1]
+    assert coal_plant.staffed_jobs == 7
+    assert coal_plant.operational is False  # unchanged
+    town_hall = _find_tile(w, "town_hall")
+    assert town_hall.staffed_jobs == 30

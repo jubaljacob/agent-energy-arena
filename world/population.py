@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from world import workforce
+
 if TYPE_CHECKING:
     from world.sim import World
 
@@ -60,7 +62,8 @@ def update_population(world: World) -> None:
     happiness -= 0.05 * coal_houses_within_3 / max(1, house_count)
     happiness = max(0.0, min(1.5, happiness))
 
-    pop = float(state.population)
+    pop_before = state.population
+    pop = float(pop_before)
 
     if jobs >= pop and capacity > pop and happiness >= 0.5:
         growth = config.base_growth_rate * pop * happiness
@@ -73,7 +76,13 @@ def update_population(world: World) -> None:
     elif happiness < 0.5:
         pop = pop * 0.99
 
-    state.population = max(0, int(pop))
+    target_pop = max(0, int(pop))
+    delta = pop_before - target_pop
+    if delta > 0:
+        workforce.drain_n(state, delta)
+    elif delta < 0:
+        state.population = target_pop
+        workforce.hire_to_fill(state)
     state.happiness = happiness
 
     tax = DAILY_TAX_PER_CAPITA * state.population
