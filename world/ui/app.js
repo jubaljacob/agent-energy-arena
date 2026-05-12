@@ -262,11 +262,18 @@
     }
 
     // Drill mode: crosshair on the locked anchor; color encodes guard state.
+    // Three rejection states mirror `drill_collision`:
+    //   tile_occupied      → red    (#ff5050)
+    //   completion_overlap → gray   (#9aa0a6) — same (x,y), |Δz| < 3
+    //   dry hole           → yellow (#f5d76e)
+    // Legal target: orange (#ff7a59). A same-(x,y) well at |Δz| ≥ 3 is legal
+    // under §4.12 and lands on the orange path.
     if (mode === "drill" && drillAnchor) {
-      const occupied = !!tileAt(drillAnchor.x, drillAnchor.y) || !!wellAt(drillAnchor.x, drillAnchor.y);
+      const collision = drillCollision(drillAnchor.x, drillAnchor.y, drillAnchor.target_z);
       const dryHole = !poolHasHc(drillAnchor.x, drillAnchor.y, drillAnchor.target_z);
       let color;
-      if (occupied) color = "#ff5050";
+      if (collision === "tile_occupied") color = "#ff5050";
+      else if (collision === "completion_overlap") color = "#9aa0a6";
       else if (dryHole) color = "#f5d76e";
       else color = "#ff7a59";
       ctx.save();
@@ -475,6 +482,21 @@
     const s = new Set();
     for (const v of revealedVoxels) s.add(`${v.x},${v.y}`);
     return s;
+  }
+
+  // Mirrors `world.subsurface.drill_collision`: returns "tile_occupied" if a
+  // non-well tile (road, refinery, ...) blocks the surface; "completion_overlap"
+  // if another well sits at the same (x, y) with |Δz| < 3 (the relaxed §4.12
+  // rule); null otherwise. Tile check runs first so the more fundamental
+  // build-side rule wins when both apply.
+  function drillCollision(x, y, targetZ) {
+    if (tileAt(x, y)) return "tile_occupied";
+    for (const w of wells) {
+      if (w.x === x && w.y === y && Math.abs(w.target_z - targetZ) < 3) {
+        return "completion_overlap";
+      }
+    }
+    return null;
   }
 
   // Dry-hole guard: returns true iff no known HC voxel sits within ±1 of
@@ -893,7 +915,15 @@
       canvas.title = `${label} · cost $${Math.round(cost).toLocaleString()} · ${cells} cells${priorNote}`;
     } else if (mode === "drill") {
       if (drillAnchor) {
-        canvas.title = `drill @ (${drillAnchor.x}, ${drillAnchor.y}) target_z=${drillAnchor.target_z} type=${drillWellType}`;
+        const collision = drillCollision(drillAnchor.x, drillAnchor.y, drillAnchor.target_z);
+        const base = `drill @ (${drillAnchor.x}, ${drillAnchor.y}) target_z=${drillAnchor.target_z} type=${drillWellType}`;
+        if (collision === "tile_occupied") {
+          canvas.title = `${base} — occupied (surface tile)`;
+        } else if (collision === "completion_overlap") {
+          canvas.title = `${base} — occupied — Δz too small`;
+        } else {
+          canvas.title = base;
+        }
       } else {
         canvas.title = "Pick a voxel in the Subsurface tab first to lock a drill target.";
       }
@@ -999,8 +1029,13 @@
       return;
     }
     const { x: ax, y: ay, target_z: az } = drillAnchor;
-    if (tileAt(ax, ay) || wellAt(ax, ay)) {
+    const collision = drillCollision(ax, ay, az);
+    if (collision === "tile_occupied") {
       showToast("drill rejected: occupied", "error");
+      return;
+    }
+    if (collision === "completion_overlap") {
+      showToast("drill rejected: occupied — Δz too small", "error");
       return;
     }
     const fire = () => fireDrill(ax, ay);
