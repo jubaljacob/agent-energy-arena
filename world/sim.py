@@ -74,16 +74,28 @@ from world.workforce import unemployed as workforce_unemployed
 
 
 def _tile_to_dict(t: Tile, world: World) -> dict[str, Any]:
-    from world.pricing import industrial_co2_for_tile, industrial_revenue_for_tile
+    from world.pricing import (
+        _commercial_residents_in_radius,
+        commercial_revenue_for_tile,
+        industrial_co2_for_tile,
+        industrial_revenue_for_tile,
+    )
 
-    # Slice 01 surfaces industrial-only economics. Non-industrial tiles get
-    # 0.0 placeholders for the four estimated_* keys; later slices fill in
-    # commercial, plant, refinery, and well values via the same fields.
+    # Slice 01 surfaced industrial economics; slice 02 adds commercial. Other
+    # tile types get 0.0 placeholders for the estimated_* keys; later slices
+    # fill in plant, refinery, and well values via the same fields.
+    extra: dict[str, Any] = {}
     if t.type == "industrial":
         revenue = industrial_revenue_for_tile(t)
         co2_t = industrial_co2_for_tile(t)
         carbon_cost = co2_t * world.state.carbon_price
         net = revenue - t.opex_per_day - carbon_cost
+    elif t.type == "commercial":
+        revenue = commercial_revenue_for_tile(world.state, t)
+        co2_t = 0.0
+        carbon_cost = 0.0
+        net = revenue - t.opex_per_day
+        extra["residents_in_radius"] = _commercial_residents_in_radius(world.state, t)
     else:
         revenue = 0.0
         co2_t = 0.0
@@ -109,6 +121,7 @@ def _tile_to_dict(t: Tile, world: World) -> dict[str, Any]:
         "estimated_co2_per_day": co2_t,
         "estimated_carbon_cost_per_day": carbon_cost,
         "estimated_net_per_day": net,
+        **extra,
     }
 
 

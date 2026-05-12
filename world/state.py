@@ -134,5 +134,6 @@ class WorldState:
             "renewable_share": 0.0,
             "injection_kw": 0.0,
             "industrial_revenue": 0.0,
+            "commercial_revenue": 0.0,
         }
     )

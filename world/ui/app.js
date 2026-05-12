@@ -667,6 +667,14 @@
     // Industrial economics (slice 01 of facility-economics-popup PRD). All
     // four rows come from server-stamped /state fields; the Net row is
     // server-computed so the UI never re-derives it client-side.
+    if (t.type === "commercial") {
+      const residents = t.residents_in_radius || 0;
+      const revenue = t.estimated_revenue_per_day || 0;
+      const net = t.estimated_net_per_day || 0;
+      rows.push(row("Residents served", fmtNum(residents, 1), "pos"));
+      rows.push(row("Revenue / day", fmtMoney(revenue), "pos"));
+      rows.push(row("Net / day", fmtMoney(net), net >= 0 ? "pos" : "neg"));
+    }
     if (t.type === "industrial") {
       const co2 = t.estimated_co2_per_day || 0;
       const carbonCost = t.estimated_carbon_cost_per_day || 0;
@@ -1322,6 +1330,7 @@
     financeListEl.innerHTML = "";
     const rows = [
       ["Tax revenue", summary.tax_revenue || 0, "+"],
+      ["Commercial revenue", summary.commercial_revenue || 0, "+"],
       ["Industrial revenue", summary.industrial_revenue || 0, "+"],
       ["Power revenue", summary.power_revenue || 0, "+"],
       ["Crude (direct sale)", summary.crude_revenue || 0, "+"],

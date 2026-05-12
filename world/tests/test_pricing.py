@@ -14,13 +14,17 @@ import pytest
 from world.catalog import TILE_CATALOG, build_catalog
 from world.economy import CARBON_PRICE_USD_PER_TON
 from world.pricing import (
+    COMMERCIAL_RADIUS,
+    COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY,
     INDUSTRIAL_REVENUE_PER_DAY,
+    _occupancy_ratio,
+    commercial_revenue_for_tile,
     industrial_co2_for_tile,
     industrial_revenue_for_tile,
     update_civic_revenue,
 )
 from world.sim import World
-from world.state import Tile
+from world.state import Tile, WorldState
 
 
 def _industrial_tile(staffed: int | None = None) -> Tile:
@@ -228,10 +232,12 @@ def test_state_tiles_non_industrial_estimated_fields_are_zero() -> None:
     w = World()
     w.reset(seed=42)
     th = next(t for t in w.state.tiles if t.type == "town_hall")
-    w.build("commercial", th.x + 1, th.y)
+    # Build a house — slice-02 wires up commercial economics, so we use a
+    # tile type whose estimated_* fields remain at the slice-01 zero default.
+    w.build("house", th.x + 1, th.y)
     s = w.state_dict()
     for t in s["tiles"]:
-        if t["type"] != "industrial":
+        if t["type"] not in {"industrial", "commercial"}:
             assert t["estimated_revenue_per_day"] == 0.0
             assert t["estimated_co2_per_day"] == 0.0
             assert t["estimated_carbon_cost_per_day"] == 0.0
@@ -269,3 +275,294 @@ def test_catalog_industrial_description_mentions_revenue_and_co2() -> None:
     desc = industrial["description"].lower()
     assert "$500" in industrial["description"] or "500" in industrial["description"]
     assert "co2" in desc or "co₂" in desc
+
+
+# =========================================================================
+# Slice 02 — commercial revenue with 5×5 chebyshev radius
+# =========================================================================
+
+
+def _commercial_tile(x: int = 5, y: int = 5, staffed: int | None = None) -> Tile:
+    spec = TILE_CATALOG["commercial"]
+    staffed_jobs = spec.jobs if staffed is None else staffed
+    return Tile(
+        id=f"com_{x}_{y}",
+        type="commercial",
+        x=x,
+        y=y,
+        built_day=0,
+        operational=True,
+        capex_paid=spec.capex,
+        opex_per_day=spec.opex_per_day,
+        jobs=spec.jobs,
+        demand_kw=spec.demand_kw,
+        staffed_jobs=staffed_jobs,
+    )
+
+
+def _house_tile(x: int, y: int, capacity: int = 8) -> Tile:
+    return Tile(
+        id=f"house_{x}_{y}",
+        type="house",
+        x=x,
+        y=y,
+        built_day=0,
+        operational=True,
+        housing_capacity=capacity,
+    )
+
+
+def _state_with(tiles: list[Tile], population: int) -> WorldState:
+    s = WorldState(seed=0)
+    s.tiles = tiles
+    s.population = population
+    return s
+
+
+# -- _occupancy_ratio ------------------------------------------------------
+
+
+def test_occupancy_ratio_full_house_full_pop() -> None:
+    state = _state_with([_house_tile(0, 0, 100)], population=100)
+    assert _occupancy_ratio(state) == pytest.approx(1.0)
+
+
+def test_occupancy_ratio_clipped_at_one() -> None:
+    state = _state_with([_house_tile(0, 0, 50)], population=100)
+    assert _occupancy_ratio(state) == pytest.approx(1.0)
+
+
+def test_occupancy_ratio_half_pop_full_house() -> None:
+    state = _state_with([_house_tile(0, 0, 100)], population=50)
+    assert _occupancy_ratio(state) == pytest.approx(0.5)
+
+
+def test_occupancy_ratio_no_pop_no_housing_returns_zero() -> None:
+    state = _state_with([], population=0)
+    assert _occupancy_ratio(state) == pytest.approx(0.0)
+
+
+def test_occupancy_ratio_no_housing_with_pop_clamps_to_one() -> None:
+    # Per spec: ``min(1.0, pop / max(1, capacity))``. With no housing and
+    # nonzero pop, ``max(1, 0) == 1`` so the ratio saturates at 1.0.
+    state = _state_with([], population=10)
+    assert _occupancy_ratio(state) == pytest.approx(1.0)
+
+
+# -- commercial_revenue_for_tile ------------------------------------------
+
+
+def test_commercial_revenue_zero_when_no_houses_in_radius() -> None:
+    com = _commercial_tile(x=5, y=5)
+    far_house = _house_tile(x=10, y=10, capacity=8)  # chebyshev dist 5 > 2
+    state = _state_with([com, far_house], population=8)
+    assert commercial_revenue_for_tile(state, com) == 0.0
+
+
+def test_commercial_revenue_sums_housing_in_5x5_chebyshev() -> None:
+    # Inside the 5×5 box (chebyshev ≤ 2): house at (3,3), (7,7) is at the
+    # corner (dist 2 — included). Outside: house at (8,5) (dist 3 — excluded).
+    com = _commercial_tile(x=5, y=5)
+    inside_a = _house_tile(x=3, y=3, capacity=8)  # dist 2
+    inside_b = _house_tile(x=7, y=7, capacity=8)  # dist 2
+    outside = _house_tile(x=8, y=5, capacity=8)  # dist 3
+    state = _state_with([com, inside_a, inside_b, outside], population=16)
+    # capacity_in_radius = 16, occupancy = 16/24 = 0.6667, efficiency = 1.0
+    expected = 16 * (16 / 24) * COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY * 1.0
+    assert commercial_revenue_for_tile(state, com) == pytest.approx(expected)
+
+
+def test_commercial_revenue_clips_at_grid_edges() -> None:
+    # Commercial at (0,0): radius 2 still works — we just sum whatever tiles
+    # are placed in (-2..2, -2..2). No grid-boundary special-casing required.
+    com = _commercial_tile(x=0, y=0)
+    house = _house_tile(x=1, y=1, capacity=8)
+    state = _state_with([com, house], population=8)
+    expected = 8 * 1.0 * COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY * 1.0
+    assert commercial_revenue_for_tile(state, com) == pytest.approx(expected)
+
+
+def test_commercial_revenue_scales_with_occupancy() -> None:
+    com = _commercial_tile(x=5, y=5)
+    house = _house_tile(x=5, y=5, capacity=100)
+    # Half occupancy
+    state = _state_with([com, house], population=50)
+    expected = 100 * 0.5 * COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY * 1.0
+    assert commercial_revenue_for_tile(state, com) == pytest.approx(expected)
+
+
+def test_commercial_revenue_scales_with_workforce_efficiency() -> None:
+    spec = TILE_CATALOG["commercial"]
+    com = _commercial_tile(x=5, y=5, staffed=spec.jobs // 2)
+    house = _house_tile(x=5, y=5, capacity=100)
+    state = _state_with([com, house], population=100)
+    eff = (spec.jobs // 2) / spec.jobs
+    expected = 100 * 1.0 * COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY * eff
+    assert commercial_revenue_for_tile(state, com) == pytest.approx(expected)
+
+
+def test_commercial_revenue_zero_when_not_operational() -> None:
+    com = _commercial_tile(x=5, y=5)
+    com.operational = False
+    house = _house_tile(x=5, y=5, capacity=100)
+    state = _state_with([com, house], population=100)
+    assert commercial_revenue_for_tile(state, com) == 0.0
+
+
+def test_commercial_revenue_includes_town_hall_capacity() -> None:
+    # Town hall has housing_capacity > 0 so it counts as a housing source.
+    com = _commercial_tile(x=5, y=5)
+    town_hall = Tile(
+        id="th",
+        type="town_hall",
+        x=6,
+        y=5,
+        built_day=0,
+        operational=True,
+        housing_capacity=100,
+        jobs=30,
+        staffed_jobs=30,
+    )
+    state = _state_with([com, town_hall], population=100)
+    expected = 100 * 1.0 * COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY * 1.0
+    assert commercial_revenue_for_tile(state, com) == pytest.approx(expected)
+
+
+def test_overlapping_commercials_independently_full_count_residents() -> None:
+    com_a = _commercial_tile(x=4, y=5)
+    com_b = _commercial_tile(x=6, y=5)
+    com_b.id = "com_b"
+    house = _house_tile(x=5, y=5, capacity=100)  # in radius of both
+    state = _state_with([com_a, com_b, house], population=100)
+    a = commercial_revenue_for_tile(state, com_a)
+    b = commercial_revenue_for_tile(state, com_b)
+    expected_each = 100 * 1.0 * COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY * 1.0
+    assert a == pytest.approx(expected_each)
+    assert b == pytest.approx(expected_each)
+
+
+def test_commercial_revenue_zero_for_non_commercial_tile() -> None:
+    com = _commercial_tile(x=5, y=5)
+    com.type = "industrial"
+    house = _house_tile(x=5, y=5, capacity=100)
+    state = _state_with([com, house], population=100)
+    assert commercial_revenue_for_tile(state, com) == 0.0
+
+
+# -- update_civic_revenue extended for commercial --------------------------
+
+
+def test_today_summary_so_far_defaults_commercial_revenue_to_zero() -> None:
+    w = World()
+    w.reset(seed=42)
+    assert "commercial_revenue" in w.state.today_summary_so_far
+    assert w.state.today_summary_so_far["commercial_revenue"] == 0.0
+
+
+def test_update_civic_revenue_accrues_commercial_to_summary_and_treasury() -> None:
+    w = World()
+    w.reset(seed=42)
+    th = next(t for t in w.state.tiles if t.type == "town_hall")
+    # Build a commercial adjacent to town hall (radius 1, well within 5×5).
+    res = w.build("commercial", th.x + 1, th.y)
+    assert res["ok"], res
+    com = next(t for t in w.state.tiles if t.type == "commercial")
+    com.staffed_jobs = com.jobs  # force full staffing
+
+    capacity = sum(t.housing_capacity for t in w.state.tiles)
+    occupancy = min(1.0, w.state.population / max(1, capacity))
+    expected = th.housing_capacity * occupancy * COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY * 1.0
+
+    treasury_before = w.state.treasury
+    update_civic_revenue(w)
+
+    assert w.state.today_summary_so_far["commercial_revenue"] == pytest.approx(expected)
+    assert w.state.treasury == pytest.approx(treasury_before + expected)
+
+
+# -- /state per-tile economics fields for commercial -----------------------
+
+
+def test_state_tiles_include_residents_in_radius_for_commercial() -> None:
+    w = World()
+    w.reset(seed=42)
+    th = next(t for t in w.state.tiles if t.type == "town_hall")
+    w.build("commercial", th.x + 1, th.y)
+    com = next(t for t in w.state.tiles if t.type == "commercial")
+    com.staffed_jobs = com.jobs
+
+    s = w.state_dict()
+    com_dict = next(t for t in s["tiles"] if t["type"] == "commercial")
+    assert "residents_in_radius" in com_dict
+    capacity = sum(t.housing_capacity for t in w.state.tiles)
+    occupancy = min(1.0, w.state.population / max(1, capacity))
+    assert com_dict["residents_in_radius"] == pytest.approx(th.housing_capacity * occupancy)
+    expected_revenue = (
+        th.housing_capacity * occupancy * COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY * 1.0
+    )
+    assert com_dict["estimated_revenue_per_day"] == pytest.approx(expected_revenue)
+    assert com_dict["estimated_net_per_day"] == pytest.approx(
+        expected_revenue - com_dict["opex_per_day"]
+    )
+
+
+# -- Integration: /step end-to-end commercial accrual ----------------------
+
+
+def test_step_accrues_commercial_revenue_using_pre_update_population() -> None:
+    """Civic revenue runs before update_population, so the commercial earnings
+    use today's lived population, not tomorrow's (post-decay) survivors.
+
+    The default starting world has pop=100 and only the town hall (jobs=30).
+    Adding a commercial brings total jobs to 42; jobs < 0.7×pop fires the
+    job-driven decline branch, dropping pop to 99 after the step. The
+    commercial revenue must reflect the pre-update pop=100 occupancy.
+    """
+    w = World()
+    w.reset(seed=42)
+    th = next(t for t in w.state.tiles if t.type == "town_hall")
+    pop_before = w.state.population
+    # Capacity snapshot before the commercial is built (commercial itself has
+    # zero housing_capacity, so adding it does not shift the denominator).
+    capacity_before = sum(t.housing_capacity for t in w.state.tiles)
+    # Build a commercial adjacent to town hall; commercial picks up town
+    # hall's 100 housing in its 5×5 box.
+    w.build("commercial", th.x + 1, th.y)
+    com = next(t for t in w.state.tiles if t.type == "commercial")
+    com.staffed_jobs = com.jobs  # ensure deterministic full staffing
+
+    w.step(days=1)
+
+    # Population must have declined — proving update_population also ran.
+    assert w.state.population < pop_before
+    # Commercial revenue used pre-update pop.
+    occupancy_pre = min(1.0, pop_before / max(1, capacity_before))
+    expected = th.housing_capacity * occupancy_pre * COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY * 1.0
+    assert w.state.today_summary_so_far["commercial_revenue"] == pytest.approx(expected)
+
+
+def test_step_no_commercial_means_zero_commercial_revenue() -> None:
+    w = World()
+    w.reset(seed=42)
+    w.step(days=1)
+    assert w.state.today_summary_so_far["commercial_revenue"] == 0.0
+
+
+# -- /catalog economics block: commercial constants ------------------------
+
+
+def test_catalog_economics_exposes_commercial_constants() -> None:
+    cat = build_catalog()
+    eco = cat["economics"]
+    assert eco["commercial_revenue_per_resident_per_day"] == pytest.approx(
+        COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY
+    )
+    assert eco["commercial_radius"] == COMMERCIAL_RADIUS
+
+
+def test_catalog_commercial_description_mentions_new_revenue_behavior() -> None:
+    cat = build_catalog()
+    commercial = next(t for t in cat["tiles"] if t["tile_type"] == "commercial")
+    desc = commercial["description"].lower()
+    assert "resident" in desc
+    assert "5" in commercial["description"]

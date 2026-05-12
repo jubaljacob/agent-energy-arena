@@ -57,7 +57,11 @@ TILE_CATALOG: dict[str, TileSpec] = {
         capex=8_000,
         opex_per_day=50,
         requires_road=True,
-        description="+12 jobs. 50 kW peak demand (8-20h, 20% otherwise). Requires road adjacency.",
+        description=(
+            "+12 jobs. 50 kW peak demand (8-20h, 20% otherwise). "
+            "Earns ~$1/resident/day from houses within 5×5 × occupancy × staffing. "
+            "Requires road adjacency."
+        ),
         jobs=12,
         demand_kw=50,
     ),
@@ -188,7 +192,11 @@ def _spec_to_dict(spec: TileSpec) -> dict[str, Any]:
 
 def build_catalog() -> dict[str, Any]:
     from world.economy import CARBON_PRICE_USD_PER_TON
-    from world.pricing import INDUSTRIAL_REVENUE_PER_DAY
+    from world.pricing import (
+        COMMERCIAL_RADIUS,
+        COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY,
+        INDUSTRIAL_REVENUE_PER_DAY,
+    )
     from world.subsurface import (
         CRUDE_PRICE_USD_PER_BBL,
         INJECTION_KWH_PER_BBL,
@@ -235,6 +243,8 @@ def build_catalog() -> dict[str, Any]:
     }
     economics = {
         "industrial_revenue_per_day": INDUSTRIAL_REVENUE_PER_DAY,
+        "commercial_revenue_per_resident_per_day": COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY,
+        "commercial_radius": COMMERCIAL_RADIUS,
         "carbon_price": CARBON_PRICE_USD_PER_TON,
     }
     return {
