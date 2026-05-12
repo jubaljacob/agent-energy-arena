@@ -1166,13 +1166,27 @@
     return m || 1;
   }
 
-  function oilColor(value, maxValue) {
-    const t = Math.min(1, Math.max(0, value / maxValue));
-    // Cool → warm gradient: dark teal (#2a3a4d) → yellow (#f5d76e).
-    const r = Math.round(0x2a + t * (0xf5 - 0x2a));
-    const g = Math.round(0x3a + t * (0xd7 - 0x3a));
-    const b = Math.round(0x4d + t * (0x6e - 0x4d));
-    return `rgb(${r},${g},${b})`;
+  // oilfield-v2 slice 02: voxels are coloured by reservoir_id so that a
+  // single connected HC blob reads as one visual region in the cross-section.
+  // The exact oil estimate is still surfaced via per-voxel <title> hover and
+  // the well popup. 8-colour rotation: reservoir_id % 8. id=0 / null means
+  // "non-HC" (shouldn't appear in revealedVoxels) — fall back to a neutral
+  // grey so a stray non-HC row would not crash the render.
+  const RESERVOIR_PALETTE = [
+    "#e76f51", // 1 — coral
+    "#f4a261", // 2 — amber
+    "#e9c46a", // 3 — sand
+    "#8ab17d", // 4 — sage
+    "#2a9d8f", // 5 — teal
+    "#4f8fc0", // 6 — sky
+    "#9b6dd7", // 7 — violet
+    "#d36cb3", // 8 — magenta
+  ];
+  function reservoirColor(reservoirId) {
+    if (reservoirId === null || reservoirId === undefined || reservoirId <= 0) {
+      return "#5a5e68";
+    }
+    return RESERVOIR_PALETTE[(reservoirId - 1) % RESERVOIR_PALETTE.length];
   }
 
   async function refreshRevealed() {
@@ -1229,11 +1243,15 @@
       r.setAttribute("y", (v.z * ch).toFixed(2));
       r.setAttribute("width", cw.toFixed(2));
       r.setAttribute("height", ch.toFixed(2));
-      r.setAttribute("fill", oilColor(v.oil_estimate_bbl, maxOil));
+      r.setAttribute("fill", reservoirColor(v.reservoir_id));
       r.setAttribute("stroke", "#1a1c22");
       r.setAttribute("stroke-width", "0.5");
+      const resTag =
+        v.reservoir_id === null || v.reservoir_id === undefined || v.reservoir_id <= 0
+          ? "—"
+          : `R${v.reservoir_id}`;
       const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-      title.textContent = `(${v.x}, ${v.y}, ${v.z}) — ${Math.round(v.oil_estimate_bbl).toLocaleString()} bbl, ${Math.round(v.perm_estimate_md)} mD`;
+      title.textContent = `(${v.x}, ${v.y}, ${v.z}) ${resTag} — ${Math.round(v.oil_estimate_bbl).toLocaleString()} bbl, ${Math.round(v.perm_estimate_md)} mD`;
       r.appendChild(title);
       if (mode === "drill") {
         r.classList.add("drill-pickable");

@@ -306,7 +306,22 @@ main {
 }
 #subchart { width: 100%; height: 320px; display: block; }
 #sublegend { font-size: 0.8rem; color: #8b8f9a; display: flex; gap: 1rem; margin-top: 0.5rem; }
-.sub-revealed-swatch { width: 12px; height: 12px; background: linear-gradient(90deg, #2a3a4d, #f5d76e); border-radius: 2px; }
+.sub-revealed-swatch {
+  width: 24px;
+  height: 12px;
+  background: linear-gradient(
+    90deg,
+    #e76f51 0 12.5%,
+    #f4a261 12.5% 25%,
+    #e9c46a 25% 37.5%,
+    #8ab17d 37.5% 50%,
+    #2a9d8f 50% 62.5%,
+    #4f8fc0 62.5% 75%,
+    #9b6dd7 75% 87.5%,
+    #d36cb3 87.5% 100%
+  );
+  border-radius: 2px;
+}
 .sub-unrevealed-swatch {
   width: 12px;
   height: 12px;
