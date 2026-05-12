@@ -379,8 +379,31 @@ tr.orphan-refinery > td:first-child { border-left: 2px solid #ff5050; }
 }
 #wellstable td.actual { color: #f5d76e; }
 #wellstable td.cumulative { color: #a8d8ff; }
+#wellstable td.boost { color: #a8d8ff; font-variant-numeric: tabular-nums; }
+#wellstable td.supports { color: #c9cad0; font-size: 0.78rem; }
 #wellstable input[type="range"] { width: 120px; vertical-align: middle; }
 #wellstable .setpoint-val { color: #c9cad0; margin-left: 0.4rem; display: inline-block; min-width: 36px; }
+
+/* wells-reservoir-rollup #03: per-reservoir group header rows in the
+   Wells table. The header spans every column and carries the reservoir
+   id, estimated/remaining bbl, revealed-voxel count, and well-type
+   counts so a player can scan capacity per reservoir at a glance. */
+#wellstable tr.reservoir-group-header > td {
+  background: #1a2230;
+  color: #a8d8ff;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  font-size: 0.8rem;
+  padding: 0.45rem 0.6rem;
+  border-top: 1px solid #2a4055;
+  font-variant-numeric: tabular-nums;
+}
+#wellstable tr.reservoir-group-empty > td {
+  color: #5a5d65;
+  font-style: italic;
+  font-size: 0.78rem;
+  text-align: center;
+}
 .wells-hint { font-size: 0.75rem; color: #8b8f9a; line-height: 1.4; margin: 0.75rem 0 0; }
 
 #wellswrap h2 {

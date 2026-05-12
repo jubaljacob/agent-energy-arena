@@ -87,6 +87,10 @@
   // `orphanRefineryIds` have no crude. Empty sets = everyone is connected.
   let orphanWellIds = new Set();
   let orphanRefineryIds = new Set();
+  // wells-reservoir-rollup #01: per-reservoir rollup array from /state.
+  // One entry per reservoir with ≥1 revealed voxel; drives the Wells-tab
+  // grouped renderer (#03). Unsurveyed reservoirs are absent.
+  let reservoirsSummary = [];
   let activeEvents = [];
   let historicalEvents = [];
   let summary = {};
@@ -1480,13 +1484,23 @@
     }
   }
 
+  function fmtBblCompact(v) {
+    const n = Number(v) || 0;
+    const abs = Math.abs(n);
+    const sign = n < 0 ? "-" : "";
+    if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(1)}M`;
+    if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}k`;
+    return `${sign}${Math.round(abs).toLocaleString()}`;
+  }
+
   function renderWells() {
     if (!wellsTableBody) return;
     wellsTableBody.innerHTML = "";
+    const COLSPAN = 8;
     if (wells.length === 0) {
       const tr = document.createElement("tr");
       const td = document.createElement("td");
-      td.colSpan = 6;
+      td.colSpan = COLSPAN;
       td.style.color = "#5a5d65";
       td.style.fontSize = "0.8rem";
       td.style.textAlign = "center";
@@ -1494,7 +1508,12 @@
       tr.appendChild(td);
       wellsTableBody.appendChild(tr);
     } else {
-      for (const w of wells) {
+      // wells-reservoir-rollup #03+#04: group wells by reservoir, surface
+      // per-row boost (producers) and supports (injectors) columns.
+      const wellsById = new Map(wells.map((w) => [w.id, w]));
+      const groupedIds = new Set();
+
+      const emitWellRow = (w) => {
         const tr = document.createElement("tr");
         const setpoint = w.setpoint_rate_bbl_day || 0;
         const cum = w.type === "injection"
@@ -1505,6 +1524,17 @@
         const idCell = orphan
           ? `${w.id} <span class="orphan-badge orphan-well-badge" title="No pipeline path to a refinery — selling raw crude at $40/bbl.">selling raw</span>`
           : `${w.id}`;
+        let boostCell = "";
+        let supportsCell = "";
+        if (w.type === "production") {
+          const boost = w.pressure_boost || 0;
+          boostCell = boost > 0 ? boost.toFixed(3) : "—";
+        } else if (w.type === "injection") {
+          const supports = w.supports_producer_ids || [];
+          supportsCell = supports.length === 0
+            ? `<span title="no qualifying producers in this reservoir at Chebyshev distance > 1.">—</span>`
+            : supports.join(", ");
+        }
         tr.innerHTML = `
           <td>${idCell}</td>
           <td>${w.type}</td>
@@ -1515,6 +1545,8 @@
           </td>
           <td class="actual">${(w.current_rate_bbl_day || 0).toFixed(1)}</td>
           <td class="cumulative">${Math.round(cum).toLocaleString()}</td>
+          <td class="boost">${boostCell}</td>
+          <td class="supports">${supportsCell}</td>
         `;
         wellsTableBody.appendChild(tr);
         const slider = tr.querySelector("input[type=range]");
@@ -1525,6 +1557,56 @@
         slider.addEventListener("change", () => {
           setWellRate(w.id, parseFloat(slider.value));
         });
+      };
+
+      const emitGroupHeader = (text) => {
+        const tr = document.createElement("tr");
+        tr.classList.add("reservoir-group-header");
+        const td = document.createElement("td");
+        td.colSpan = COLSPAN;
+        td.textContent = text;
+        tr.appendChild(td);
+        wellsTableBody.appendChild(tr);
+      };
+
+      const emitEmptyPlaceholder = () => {
+        const tr = document.createElement("tr");
+        tr.classList.add("reservoir-group-empty");
+        const td = document.createElement("td");
+        td.colSpan = COLSPAN;
+        td.textContent = "no wells — drill here?";
+        tr.appendChild(td);
+        wellsTableBody.appendChild(tr);
+      };
+
+      for (const r of reservoirsSummary) {
+        const producerIds = r.producer_ids || [];
+        const injectorIds = r.injector_ids || [];
+        const head = `Reservoir R${r.reservoir_id} — est ${fmtBblCompact(r.estimated_bbl || 0)} bbl · remaining ${fmtBblCompact(r.remaining_bbl || 0)} · ${r.n_revealed_voxels || 0} revealed vox · ${producerIds.length}P + ${injectorIds.length}I`;
+        emitGroupHeader(head);
+        if (producerIds.length === 0 && injectorIds.length === 0) {
+          emitEmptyPlaceholder();
+          continue;
+        }
+        for (const id of producerIds) {
+          const w = wellsById.get(id);
+          if (w) { emitWellRow(w); groupedIds.add(id); }
+        }
+        for (const id of injectorIds) {
+          const w = wellsById.get(id);
+          if (w) { emitWellRow(w); groupedIds.add(id); }
+        }
+      }
+      const unaffiliated = wells.filter((w) => !groupedIds.has(w.id));
+      if (unaffiliated.length > 0) {
+        emitGroupHeader("Unaffiliated (drilled into rock)");
+        const sorted = [...unaffiliated].sort((a, b) => {
+          if (a.type !== b.type) return a.type === "production" ? -1 : 1;
+          if (a.id < b.id) return -1;
+          if (a.id > b.id) return 1;
+          return 0;
+        });
+        for (const w of sorted) emitWellRow(w);
       }
     }
     if (wellsStatsEl) {
@@ -1624,6 +1706,7 @@
       wells = s.wells || [];
       orphanWellIds = new Set(s.orphan_well_ids || []);
       orphanRefineryIds = new Set(s.orphan_refinery_ids || []);
+      reservoirsSummary = s.reservoirs_summary || [];
       activeEvents = s.active_events || [];
       historicalEvents = s.historical_events || [];
       summary = s.today_summary_so_far || {};
