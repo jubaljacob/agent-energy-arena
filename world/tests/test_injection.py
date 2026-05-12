@@ -295,10 +295,16 @@ def test_injection_kw_summary_accumulates_hourly_power():
     w.state.treasury = 10_000_000.0
     # Build enough plant capacity to hold balanced.
     w.build("coal_plant", 5, 5)
+    # Force the coal plant fully staffed even though pop=0; the workforce
+    # module's max(0, pop-employed) clamp keeps the inconsistency benign.
+    coal = next(t for t in w.state.tiles if t.type == "coal_plant")
+    coal.staffed_jobs = coal.jobs
     w.state.power_now["balance_state"] = "balanced"
     w.drill(10, 10, 8, "injection")
+    inj = w.state.wells[0]
+    inj.staffed_jobs = 2  # injection_well jobs=2
     setpoint = 100.0
-    w.control_well(w.state.wells[0].id, setpoint)
+    w.control_well(inj.id, setpoint)
     w.step(days=1)
     # When the grid stays balanced for all 24 hours, injection_kw = 24 ×
     # (setpoint × 50 / 24) = setpoint × 50 = 5000 kWh.

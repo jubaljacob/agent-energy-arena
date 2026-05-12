@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from world import workforce
 from world.catalog import TILE_CATALOG
 from world.weather import P_solar_kw, turbine_kw
 
@@ -155,28 +156,35 @@ def dispatch(
         key=lambda x: (TILE_CATALOG[x.type].fuel_cost_per_mwh, x.id),
     )
 
-    # Step 1: must-take renewables
+    # Per-PRD: an N%-staffed plant behaves like an N%-sized plant. Every
+    # capacity-derived figure (ceiling, must-run floor, ramp room, intermittent
+    # output cap) is multiplied by workforce.efficiency(p). Fuel burn and CO2
+    # are linear in dispatched kWh and scale automatically.
+    eff_cap: dict[str, float] = {
+        p.id: TILE_CATALOG[p.type].capacity_kw * workforce.efficiency(p) for p in operational
+    }
+
+    # Step 1: must-take renewables (capped at effective capacity).
     for p in solar:
-        outputs[p.id] = P_solar_kw(D, h, cloud)
+        outputs[p.id] = min(P_solar_kw(D, h, cloud), eff_cap[p.id])
     for p in wind:
-        outputs[p.id] = turbine_kw(wind_v)
+        outputs[p.id] = min(turbine_kw(wind_v), eff_cap[p.id])
 
     supply = sum(outputs.values())
 
-    # Step 2: coal must-run minimum (25% of capacity).
+    # Step 2: coal must-run minimum (25% of effective capacity).
     for p in coal:
-        cap = TILE_CATALOG[p.type].capacity_kw
-        outputs[p.id] = cap * COAL_MIN_RUN
+        outputs[p.id] = eff_cap[p.id] * COAL_MIN_RUN
         supply += outputs[p.id]
 
     remaining = max(0.0, demand_kw - supply)
 
     # Step 3: ramp coal upward by cost (already sorted). Bound by ramp_room
-    # measured from the previous hour's output, capped at capacity.
+    # measured from the previous hour's output, capped at effective capacity.
     for p in coal:
         if remaining <= 0:
             break
-        cap = TILE_CATALOG[p.type].capacity_kw
+        cap = eff_cap[p.id]
         ramp_room = cap * COAL_RAMP_PER_HOUR
         # Newly-built coal: assume it warm-starts at must-run, no prior hour.
         prev_out = prev_outputs.get(p.id, cap * COAL_MIN_RUN)
@@ -194,7 +202,7 @@ def dispatch(
         if remaining <= 0:
             outputs[p.id] = 0.0
             continue
-        cap = TILE_CATALOG[p.type].capacity_kw
+        cap = eff_cap[p.id]
         ramp_room = cap * GAS_RAMP_PER_HOUR
         prev_out = prev_outputs.get(p.id, 0.0)
         max_out = min(cap, prev_out + ramp_room)

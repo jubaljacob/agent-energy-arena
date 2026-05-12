@@ -34,6 +34,8 @@ def _plant(world: World, tile_type: str, x: int, y: int) -> Tile:
         operational=True,
         capex_paid=spec.capex,
         opex_per_day=spec.opex_per_day,
+        jobs=spec.jobs,
+        staffed_jobs=spec.jobs,
     )
     world.state.tiles.append(tile)
     return tile

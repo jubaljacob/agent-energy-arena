@@ -28,7 +28,7 @@ def _fresh_world() -> World:
     return w
 
 
-def _plant(tile_type: str, idx: int = 1) -> Tile:
+def _plant(tile_type: str, idx: int = 1, staffed_jobs: int | None = None) -> Tile:
     spec = TILE_CATALOG[tile_type]
     return Tile(
         id=f"{tile_type}-{idx}",
@@ -40,7 +40,7 @@ def _plant(tile_type: str, idx: int = 1) -> Tile:
         capex_paid=spec.capex,
         opex_per_day=spec.opex_per_day,
         jobs=spec.jobs,
-        staffed_jobs=spec.jobs,
+        staffed_jobs=spec.jobs if staffed_jobs is None else staffed_jobs,
     )
 
 
@@ -261,6 +261,8 @@ def _build_at(w: World, tile_type: str, x: int, y: int) -> Tile:
         operational=True,
         capex_paid=spec.capex,
         opex_per_day=spec.opex_per_day,
+        jobs=spec.jobs,
+        staffed_jobs=spec.jobs,
     )
     w.state.tiles.append(tile)
     return tile
@@ -392,3 +394,138 @@ def test_full_day_blackout_pins_happiness_at_zero() -> None:
     # 24 blackout hours × 0.05/hr = 1.20 → clipped to 0 by [0, 1.5].
     assert w.state.happiness == pytest.approx(0.0, abs=0.001)
     assert w.state.yesterday_blackout_hours == 24.0
+
+
+# -- Workforce efficiency scaling (slice 04) --------------------------------
+
+
+def test_half_staffed_coal_ceiling_is_half_capacity() -> None:
+    """A coal plant at 4/8 staff has effective capacity = 0.5 × catalog."""
+    p = _plant("coal_plant", staffed_jobs=4)  # jobs=8 → efficiency=0.5
+    cap = TILE_CATALOG["coal_plant"].capacity_kw
+    eff_cap = cap * 0.5
+    # Big prior to skip the ramp constraint — pin the ceiling alone.
+    prev = {p.id: eff_cap}
+    outputs, _s, _b = dispatch([p], demand_kw=10_000.0, prev_outputs=prev, weather={}, D=0, h=12)
+    assert outputs[p.id] == pytest.approx(eff_cap)
+
+
+def test_half_staffed_coal_must_run_is_half_floor() -> None:
+    """Half-staffed coal's must-run floor scales with efficiency."""
+    p = _plant("coal_plant", staffed_jobs=4)
+    cap = TILE_CATALOG["coal_plant"].capacity_kw
+    outputs, _s, _b = dispatch([p], demand_kw=0.0, prev_outputs={}, weather={}, D=0, h=12)
+    assert outputs[p.id] == pytest.approx(cap * 0.5 * COAL_MIN_RUN)
+
+
+def test_half_staffed_coal_ramp_scales() -> None:
+    """Cold-start half-staffed coal: hour 1 cap = eff_floor + eff_ramp."""
+    p = _plant("coal_plant", staffed_jobs=4)
+    cap = TILE_CATALOG["coal_plant"].capacity_kw
+    eff_cap = cap * 0.5
+    # No prior output → warm-start at effective must-run.
+    outputs, _s, _b = dispatch([p], demand_kw=10_000.0, prev_outputs={}, weather={}, D=0, h=12)
+    expected = eff_cap * COAL_MIN_RUN + eff_cap * COAL_RAMP_PER_HOUR
+    assert outputs[p.id] == pytest.approx(expected)
+
+
+def test_idle_coal_plant_produces_no_output() -> None:
+    """A 0-staffed coal plant: no output, no must-run, no ramp."""
+    p = _plant("coal_plant", staffed_jobs=0)
+    outputs, _s, by_source = dispatch(
+        [p], demand_kw=10_000.0, prev_outputs={}, weather={}, D=0, h=12
+    )
+    assert outputs[p.id] == 0.0
+    assert by_source["coal"] == 0.0
+
+
+def test_idle_solar_farm_produces_no_output() -> None:
+    """0-staffed solar farm under full sun produces 0 kW."""
+    p = _plant("solar_farm", staffed_jobs=0)
+    weather = {"cloud_factor": 1.0, "wind_speed_mps": 0.0}
+    outputs, _s, by_source = dispatch(
+        [p], demand_kw=10_000.0, prev_outputs={}, weather=weather, D=80, h=12
+    )
+    assert outputs[p.id] == 0.0
+    assert by_source["solar"] == 0.0
+
+
+def test_idle_wind_turbine_produces_no_output() -> None:
+    """0-staffed wind turbine at rated speed produces 0 kW."""
+    p = _plant("wind_turbine", staffed_jobs=0)
+    weather = {"cloud_factor": 0.0, "wind_speed_mps": 12.0}
+    outputs, _s, by_source = dispatch(
+        [p], demand_kw=10_000.0, prev_outputs={}, weather=weather, D=0, h=0
+    )
+    assert outputs[p.id] == 0.0
+    assert by_source["wind"] == 0.0
+
+
+def test_half_staffed_wind_caps_at_half_capacity() -> None:
+    """A 1/2-staffed wind turbine at rated speed produces half of catalog."""
+    p = _plant("wind_turbine", staffed_jobs=1)  # jobs=2 → efficiency=0.5
+    cap = TILE_CATALOG["wind_turbine"].capacity_kw
+    weather = {"cloud_factor": 0.0, "wind_speed_mps": 12.0}
+    outputs, _s, _b = dispatch([p], demand_kw=10_000.0, prev_outputs={}, weather=weather, D=0, h=0)
+    assert outputs[p.id] == pytest.approx(cap * 0.5)
+
+
+def test_half_staffed_solar_caps_at_half_capacity() -> None:
+    """A 1/2-staffed solar farm at noon produces half of full-staff output."""
+    full = _plant("solar_farm", idx=1)
+    half = _plant("solar_farm", idx=2, staffed_jobs=1)
+    weather = {"cloud_factor": 1.0, "wind_speed_mps": 0.0}
+    out_full, _s, _b = dispatch(
+        [full], demand_kw=10_000.0, prev_outputs={}, weather=weather, D=80, h=12
+    )
+    out_half, _s, _b = dispatch(
+        [half], demand_kw=10_000.0, prev_outputs={}, weather=weather, D=80, h=12
+    )
+    assert out_half[half.id] == pytest.approx(out_full[full.id] * 0.5)
+
+
+def test_half_staffed_gas_ramp_scales() -> None:
+    """A 1/4-staffed gas peaker (1/4 jobs) has 1/4 ramp and ceiling."""
+    p = _plant("gas_peaker", staffed_jobs=1)  # jobs=4 → efficiency=0.25
+    cap = TILE_CATALOG["gas_peaker"].capacity_kw
+    outputs, _s, _b = dispatch([p], demand_kw=10_000.0, prev_outputs={}, weather={}, D=0, h=12)
+    # Cold-start: prev=0, eff_cap = 0.25 × 500 = 125, ramp room = 50% × 125 = 62.5.
+    assert outputs[p.id] == pytest.approx(cap * 0.25 * GAS_RAMP_PER_HOUR)
+
+
+def test_idle_coal_plant_zero_fuel_and_co2_through_sim() -> None:
+    """End-to-end: a 0-staffed coal plant emits 0 fuel cost and 0 CO2."""
+    w = _fresh_world()
+    cx, cy = w.config.world_w // 2, w.config.world_h // 2
+    # Drop unemployed to 0 so the new coal plant is built unstaffed.
+    w.state.population = 30  # exactly fills town hall
+    res = w.build("coal_plant", cx + 1, cy)
+    assert res["ok"] is True
+    coal = next(t for t in w.state.tiles if t.type == "coal_plant")
+    assert coal.staffed_jobs == 0
+    # Restore population so demand exists and would normally trigger coal.
+    w.state.population = 100
+    w.step(days=1)
+    summary = w.state.today_summary_so_far
+    # Coal contributed 0 → fuel cost from coal = 0, CO2 from coal = 0.
+    # The gas peaker doesn't exist; only the idle coal plant. Any fuel/CO2
+    # would be from coal — both must be zero.
+    assert summary.get("fuel_cost", 0.0) == pytest.approx(0.0)
+    assert summary.get("co2_emitted_t", 0.0) == pytest.approx(0.0)
+
+
+def test_plant_failure_preserves_staffing() -> None:
+    """operational=False does not perturb staffed_jobs; restore resumes crew."""
+    w = _fresh_world()
+    w.state.treasury = 1_000_000.0
+    cx, cy = w.config.world_w // 2, w.config.world_h // 2
+    w.build("coal_plant", cx + 1, cy)
+    coal = next(t for t in w.state.tiles if t.type == "coal_plant")
+    assert coal.staffed_jobs == 8
+    # Simulate plant failure.
+    coal.operational = False
+    # Workforce module sees the staffing regardless of operational flag.
+    assert coal.staffed_jobs == 8
+    # Restore.
+    coal.operational = True
+    assert coal.staffed_jobs == 8

@@ -128,7 +128,9 @@ def test_job_decline_70_days_approaches_equilibrium():
     every hour — without it, the issue-22 happiness-decline branch
     cascades pop past the job-floor down toward 0."""
     w = _fresh_world()
-    _inject_tile(w, type="gas_peaker", x=0, y=0)
+    # Inject a fully-staffed gas peaker (workforce slice 04: catalog efficiency
+    # zeroes dispatch for unstaffed plants).
+    _inject_tile(w, type="gas_peaker", x=0, y=0, staffed_jobs=4)
     w.state.tiles[-1].current_output_kw = 0.0
     # Set the catalog-driven capacity field so dispatch sees a usable plant.
     w.state.tiles[-1].opex_per_day = 150.0

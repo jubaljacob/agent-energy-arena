@@ -206,6 +206,8 @@ def test_step_accumulates_total_served_kwh():
             y=th.y,
             built_day=0,
             operational=True,
+            jobs=8,
+            staffed_jobs=8,
         )
     )
     w.step(days=1)
@@ -228,6 +230,8 @@ def test_full_renewable_supply_drives_R_to_one():
                 y=th.y,
                 built_day=0,
                 operational=True,
+                jobs=2,
+                staffed_jobs=2,
             )
         )
     for i in range(8):
@@ -239,6 +243,8 @@ def test_full_renewable_supply_drives_R_to_one():
                 y=th.y + 1,
                 built_day=0,
                 operational=True,
+                jobs=2,
+                staffed_jobs=2,
             )
         )
     w.step(days=2)
@@ -261,6 +267,8 @@ def test_no_renewables_means_R_zero():
             y=th.y,
             built_day=0,
             operational=True,
+            jobs=8,
+            staffed_jobs=8,
         )
     )
     w.step(days=1)
@@ -284,6 +292,8 @@ def test_curtailed_kwh_excluded_from_both_numerator_and_denominator():
                 y=th.y + 1 + (i // 5),
                 built_day=0,
                 operational=True,
+                jobs=2,
+                staffed_jobs=2,
             )
         )
     w.step(days=1)
