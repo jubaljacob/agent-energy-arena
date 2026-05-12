@@ -42,6 +42,32 @@
 
   const PLANT_TYPES = ["solar_farm", "wind_turbine", "coal_plant", "gas_peaker"];
 
+  // Workforce slice 08: staffing badge colours. Bands defined by the PRD:
+  // full = 100%, partial = 50–99%, low = 1–49%, idle = 0%. Background +
+  // foreground pairs mirror the .balance-badge palette in style.css so the
+  // badges blend with the existing UI chrome.
+  const STAFFING_BAND_BG = {
+    full: "#1d3a25",
+    partial: "#3a3119",
+    low: "#3a1d1d",
+    idle: "#1a1c22",
+  };
+  const STAFFING_BAND_FG = {
+    full: "#b0e8c8",
+    partial: "#f0d28e",
+    low: "#ffb0b0",
+    idle: "#8b8f9a",
+  };
+
+  function staffingBand(staffed, jobs) {
+    if (jobs <= 0) return null;
+    const eff = staffed / jobs;
+    if (eff <= 0) return "idle";
+    if (eff < 0.5) return "low";
+    if (eff < 1.0) return "partial";
+    return "full";
+  }
+
   let cols = 32;
   let rows = 32;
   let tiles = [];
@@ -199,6 +225,60 @@
       ctx.strokeRect(drillAnchor.x * cw + 0.5, drillAnchor.y * ch + 0.5, cw - 1, ch - 1);
       ctx.restore();
     }
+
+    drawStaffingBadges(cw, ch);
+  }
+
+  // Per-well jobs counts are not in /state — wells only carry staffed_jobs.
+  // Pull the per-type denominator from the full /catalog payload and key it
+  // by the well's runtime type ("production"|"injection").
+  function wellJobsByType() {
+    if (!catalogRaw || !Array.isArray(catalogRaw.tiles)) {
+      return { production: 0, injection: 0 };
+    }
+    const byType = {};
+    for (const entry of catalogRaw.tiles) {
+      byType[entry.tile_type] = entry.jobs || 0;
+    }
+    return {
+      production: byType.oil_well || 0,
+      injection: byType.injection_well || 0,
+    };
+  }
+
+  function drawStaffingBadges(cw, ch) {
+    const fontPx = Math.max(7, Math.floor(ch * 0.32));
+    ctx.save();
+    ctx.font = `${fontPx}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const t of tiles) {
+      if (!(t.jobs > 0)) continue;
+      drawStaffingBadge(t.x, t.y, t.staffed_jobs, t.jobs, cw, ch, fontPx);
+    }
+    const wellJobs = wellJobsByType();
+    for (const w of wells) {
+      const jobs = wellJobs[w.type] || 0;
+      if (jobs <= 0) continue;
+      drawStaffingBadge(w.x, w.y, w.staffed_jobs, jobs, cw, ch, fontPx);
+    }
+    ctx.restore();
+  }
+
+  function drawStaffingBadge(x, y, staffed, jobs, cw, ch, fontPx) {
+    const band = staffingBand(staffed, jobs);
+    if (!band) return;
+    const text = `${staffed}/${jobs}`;
+    const padX = 2;
+    const padY = 1;
+    const bw = Math.min(cw - 1, ctx.measureText(text).width + padX * 2);
+    const bh = fontPx + padY * 2;
+    const bx = x * cw + cw - bw - 1;
+    const by = y * ch + 1;
+    ctx.fillStyle = STAFFING_BAND_BG[band];
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = STAFFING_BAND_FG[band];
+    ctx.fillText(text, bx + bw / 2, by + bh / 2);
   }
 
   function tileAt(x, y) {
@@ -1217,7 +1297,7 @@
       treasury = s.treasury;
       els.day.textContent = s.day;
       els.treasury.textContent = Math.round(s.treasury).toLocaleString();
-      els.population.textContent = s.population;
+      els.population.textContent = `${s.unemployed}/${s.population}`;
       els.happiness.textContent = s.happiness.toFixed(2);
       const balanceState = (s.power_now && s.power_now.balance_state) || "—";
       els.balance.textContent = balanceState;
