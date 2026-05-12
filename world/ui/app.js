@@ -94,7 +94,7 @@
   // "drill", or null. Only one mode is active at a time; selecting a build
   // tile, the Survey button, or the Drill button deactivates the others.
   let mode = null;
-  let surveySize = 8;
+  let surveySize = 4;
   let drillWellType = "production";
   // Locked drill anchor (picked via voxel-click in the Subsurface tab).
   // null until the user picks a voxel. Survives slice-selector changes.
@@ -385,6 +385,8 @@
   }
 
   // base_cost * (size / base_size)**2 — matches world.subsurface.survey_cost.
+  // `base_size` is the SEISMIC_DEFAULT_SIZE constant (4 under oilfield-v2),
+  // so the formula is equivalent to the catalog-advertised `base * (size/4)**2`.
   // Returns null until /catalog has loaded.
   function surveyCost(size) {
     if (!catalogRaw || !catalogRaw.subsurface) return null;

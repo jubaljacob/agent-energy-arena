@@ -33,8 +33,9 @@ def test_catalog_subsurface_survey_block_matches_constants() -> None:
     assert survey["min_size"] == SEISMIC_MIN_SIZE
     assert survey["max_size"] == SEISMIC_MAX_SIZE
     assert survey["default_size"] == SEISMIC_DEFAULT_SIZE
+    assert survey["default_size"] == 4
     # cost_formula is descriptive metadata; clients must not eval it.
-    assert survey["cost_formula"] == "base_cost * (size / base_size) ** 2"
+    assert survey["cost_formula"] == "base * (size/4)**2"
 
 
 def test_catalog_subsurface_drill_production_matches_constants() -> None:

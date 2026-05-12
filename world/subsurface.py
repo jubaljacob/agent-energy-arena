@@ -1,7 +1,8 @@
 """3D voxel grid for the subsurface, plus seismic survey mechanic.
 
 Implements §3.5 (reservoir generation), §4.10 (seismic survey) of the brief
-and the PRD's quadratic survey-cost override (`cost = 15_000 × (size/8)²`).
+and the oilfield-v2 quadratic survey-cost override
+(`cost = 15_000 × (size/4)²`; size-4 is the cheapest legal column).
 The voxel grid is generated at world reset from `sim_rng`; surveys also draw
 from `sim_rng` (they happen between `/step` calls so the per-day RNG-budget
 contract that anchors step-size invariance is unaffected).
@@ -24,9 +25,11 @@ import numpy as np
 # The HC-probability formula is left unchanged from the brief.
 VOXEL_VOLUME_BBL = 700_000.0
 
-# Survey constants (§4.10 + PRD quadratic override).
+# Survey constants (§4.10 + oilfield-v2 §"Survey rescale": cost is
+# 15_000 × (size/4)² so a size-4 column costs $15k and a size-8 column
+# costs $60k. Default UI survey size is 4 — the cheapest legal column.
 SEISMIC_BASE_COST = 15_000.0
-SEISMIC_DEFAULT_SIZE = 8
+SEISMIC_DEFAULT_SIZE = 4
 SEISMIC_MIN_SIZE = 4
 SEISMIC_MAX_SIZE = 16
 SEISMIC_OIL_SIGMA = 0.25
@@ -97,7 +100,9 @@ class SubsurfaceGrid:
 
 
 def survey_cost(size: int) -> float:
-    """PRD quadratic cost: 15_000 × (size / 8)²."""
+    """Oilfield-v2 quadratic cost: 15_000 × (size / 4)². A size-4 column
+    costs the base $15k; a size-8 column costs $60k; a size-16 column
+    costs $240k."""
     return SEISMIC_BASE_COST * (size / SEISMIC_DEFAULT_SIZE) ** 2
 
 

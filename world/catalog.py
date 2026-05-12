@@ -230,7 +230,7 @@ def build_catalog() -> dict[str, Any]:
             "base_size": SEISMIC_DEFAULT_SIZE,
             "min_size": SEISMIC_MIN_SIZE,
             "max_size": SEISMIC_MAX_SIZE,
-            "cost_formula": "base_cost * (size / base_size) ** 2",
+            "cost_formula": "base * (size/4)**2",
             "default_size": SEISMIC_DEFAULT_SIZE,
         },
         "drill": {

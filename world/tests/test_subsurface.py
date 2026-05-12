@@ -98,38 +98,41 @@ def test_reservoir_voxel_properties_in_distribution_ranges():
 
 
 def test_survey_cost_quadratic_scaling():
-    assert survey_cost(8) == SEISMIC_BASE_COST
-    assert survey_cost(4) == SEISMIC_BASE_COST * 0.25
-    assert survey_cost(16) == SEISMIC_BASE_COST * 4.0
+    # Oilfield-v2 rescale: base anchors at size=4 (15_000 * (4/4)**2 = 15_000).
+    assert survey_cost(4) == SEISMIC_BASE_COST
+    assert survey_cost(4) == 15_000
+    assert survey_cost(8) == SEISMIC_BASE_COST * 4.0
+    assert survey_cost(8) == 60_000
+    assert survey_cost(16) == SEISMIC_BASE_COST * 16.0
 
 
-def test_survey_default_size_8_costs_15k_and_returns_64xD_records():
-    w = World()
-    w.reset(seed=42)
-    treasury_before = w.state.treasury
-    res = w.survey(16, 16, size=8)
-    assert res["ok"] is True
-    assert w.state.treasury == treasury_before - 15_000
-    voxels = res["result"]["voxels"]
-    assert len(voxels) == 8 * 8 * w.config.world_d
-
-
-def test_survey_size_4_costs_3750():
+def test_survey_default_size_4_costs_15k_and_returns_16xD_records():
     w = World()
     w.reset(seed=42)
     treasury_before = w.state.treasury
     res = w.survey(16, 16, size=4)
     assert res["ok"] is True
-    assert w.state.treasury == treasury_before - 3_750
+    assert w.state.treasury == treasury_before - 15_000
+    voxels = res["result"]["voxels"]
+    assert len(voxels) == 4 * 4 * w.config.world_d
 
 
-def test_survey_size_16_costs_60000():
+def test_survey_size_8_costs_60000():
+    w = World()
+    w.reset(seed=42)
+    treasury_before = w.state.treasury
+    res = w.survey(16, 16, size=8)
+    assert res["ok"] is True
+    assert w.state.treasury == treasury_before - 60_000
+
+
+def test_survey_size_16_costs_240000():
     w = World()
     w.reset(seed=42)
     treasury_before = w.state.treasury
     res = w.survey(16, 16, size=16)
     assert res["ok"] is True
-    assert w.state.treasury == treasury_before - 60_000
+    assert w.state.treasury == treasury_before - 240_000
 
 
 def test_survey_rejects_size_below_min():
@@ -325,7 +328,7 @@ def test_api_survey_endpoint_logs_and_deducts():
     treasury_before = w.state.treasury
     res = client.post("/survey", json={"x": 16, "y": 16, "size": 8}).json()
     assert res["ok"] is True
-    assert w.state.treasury == treasury_before - 15_000
+    assert w.state.treasury == treasury_before - 60_000
     assert "voxels" in res["result"]
 
 
