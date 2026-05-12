@@ -11,11 +11,14 @@ import math
 import pytest
 
 from world.sim import World
+from world.state import WorldState
 from world.weather import (
+    HEATWAVE_SOLAR_DERATE,
     WIND_RATED_KW,
     P_solar_kw,
     derive_phi_seed,
     irradiance,
+    solar_derate_multiplier,
     sunrise,
     sunset,
     turbine_kw,
@@ -170,6 +173,28 @@ def test_phi_seed_is_deterministic_per_seed() -> None:
     for s in (0, 1, 42, 999, 1_000_000):
         phi = derive_phi_seed(s)
         assert 0.0 <= phi < 2.0 * math.pi
+
+
+# -- Heatwave solar derate (balance-upgrade-p0 issue 05) --------------------
+
+
+def test_solar_derate_multiplier_returns_one_when_no_active_events() -> None:
+    state = WorldState(seed=42)
+    assert state.active_events == []
+    assert solar_derate_multiplier(state) == 1.0
+
+
+def test_solar_derate_multiplier_returns_0_8_during_heatwave() -> None:
+    state = WorldState(seed=42)
+    state.active_events.append({"type": "heatwave", "ends_day": 5})
+    assert solar_derate_multiplier(state) == HEATWAVE_SOLAR_DERATE == 0.8
+
+
+def test_solar_derate_multiplier_ignores_other_active_events() -> None:
+    state = WorldState(seed=42)
+    state.active_events.append({"type": "fuel_price_shock", "ends_day": 3})
+    state.active_events.append({"type": "demand_surprise", "ends_day": 7})
+    assert solar_derate_multiplier(state) == 1.0
 
 
 # -- Sim integration ---------------------------------------------------------

@@ -73,6 +73,7 @@ from world.weather import (
     INITIAL_CLOUD_FACTOR,
     INITIAL_WIND_DIRECTION_DEG,
     derive_phi_seed,
+    solar_derate_multiplier,
     step_weather_one_hour,
     v_mean,
 )
@@ -706,6 +707,7 @@ class World:
                 self.state.weather_now,
                 self.state.day,
                 hour,
+                solar_derate=solar_derate_multiplier(self.state),
             )
 
             # Battery dispatch (balance-upgrade-p0 slice 02). Charge step

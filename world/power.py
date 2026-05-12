@@ -132,6 +132,7 @@ def dispatch(
     weather: dict[str, float],
     D: int,
     h: int,
+    solar_derate: float = 1.0,
 ) -> tuple[dict[str, float], float, dict[str, float]]:
     """Run the merit-order dispatch for one hour.
 
@@ -139,6 +140,9 @@ def dispatch(
     aggregates outputs into the four canonical keys: "solar", "wind",
     "coal", "gas". Non-operational plants are zeroed; they neither
     consume ramp room nor count toward must-run.
+
+    `solar_derate` (default 1.0) multiplies the per-solar-plant output
+    cap to model heatwave panel-temperature losses; wind unaffected.
     """
     outputs: dict[str, float] = {p.id: 0.0 for p in plants}
 
@@ -166,8 +170,9 @@ def dispatch(
     }
 
     # Step 1: must-take renewables (capped at effective capacity).
+    # Solar cap is further scaled by `solar_derate` (heatwave panel-temp loss).
     for p in solar:
-        outputs[p.id] = min(P_solar_kw(D, h, cloud), eff_cap[p.id])
+        outputs[p.id] = min(P_solar_kw(D, h, cloud), eff_cap[p.id] * solar_derate)
     for p in wind:
         outputs[p.id] = min(turbine_kw(wind_v), eff_cap[p.id])
 

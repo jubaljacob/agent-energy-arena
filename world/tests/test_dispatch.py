@@ -125,6 +125,69 @@ def test_dispatch_solar_zero_at_night() -> None:
     assert outputs[p.id] == 0.0
 
 
+def test_solar_derate_during_heatwave() -> None:
+    """Solar output drops 20% when `solar_derate=0.8`; unchanged at 1.0.
+
+    AC pin (balance-upgrade-p0 issue 05): a heatwave-active dispatch call
+    receives `solar_derate_multiplier(state) = 0.8`, which caps each solar
+    plant at 80% of its effective capacity.
+    """
+    p = _plant("solar_farm")
+    weather = {"cloud_factor": 1.0, "wind_speed_mps": 0.0}
+    base_out, _, base_by = dispatch(
+        [p], demand_kw=10_000.0, prev_outputs={}, weather=weather, D=80, h=12
+    )
+    derated_out, _, derated_by = dispatch(
+        [p],
+        demand_kw=10_000.0,
+        prev_outputs={},
+        weather=weather,
+        D=80,
+        h=12,
+        solar_derate=0.8,
+    )
+    # Baseline noon solar ≈ 150 kW; derated ≈ 120 kW.
+    assert base_out[p.id] == pytest.approx(150.0, abs=0.5)
+    assert derated_out[p.id] == pytest.approx(120.0, abs=0.5)
+    assert derated_by["solar"] == pytest.approx(0.8 * base_by["solar"])
+
+
+def test_solar_derate_does_not_affect_wind() -> None:
+    """Wind output is unchanged when `solar_derate < 1.0`."""
+    p = _plant("wind_turbine")
+    weather = {"cloud_factor": 0.0, "wind_speed_mps": 12.0}
+    outputs, _supply, by_source = dispatch(
+        [p],
+        demand_kw=10_000.0,
+        prev_outputs={},
+        weather=weather,
+        D=0,
+        h=0,
+        solar_derate=0.8,
+    )
+    assert outputs[p.id] == pytest.approx(200.0)
+    assert by_source["wind"] == pytest.approx(200.0)
+
+
+def test_solar_derate_defaults_to_one() -> None:
+    """No-arg dispatch yields the same solar output as `solar_derate=1.0`."""
+    p = _plant("solar_farm")
+    weather = {"cloud_factor": 1.0, "wind_speed_mps": 0.0}
+    default_out, _, _ = dispatch(
+        [p], demand_kw=10_000.0, prev_outputs={}, weather=weather, D=80, h=12
+    )
+    explicit_out, _, _ = dispatch(
+        [p],
+        demand_kw=10_000.0,
+        prev_outputs={},
+        weather=weather,
+        D=80,
+        h=12,
+        solar_derate=1.0,
+    )
+    assert default_out[p.id] == pytest.approx(explicit_out[p.id])
+
+
 # -- Coal must-run + ramp (Step 2 + 3) --------------------------------------
 
 

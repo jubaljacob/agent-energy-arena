@@ -28,9 +28,16 @@ if TYPE_CHECKING:
     import numpy as np
 
     from world.sim import World
+    from world.state import WorldState
 
 SOLAR_PEAK_KW: float = 150.0
 WIND_RATED_KW: float = 200.0
+
+# Heatwaves derate solar panel output by 20% (balance-upgrade-p0 §"Heatwave
+# solar derate"): on top of the residential demand spike the existing event
+# already applies, the panel-temperature efficiency loss closes the loophole
+# where a solar-heavy fleet could ignore the event entirely.
+HEATWAVE_SOLAR_DERATE: float = 0.8
 
 # AR(1) noise standard deviations (brief §4.1, §4.2).
 _CLOUD_NOISE_SIGMA: float = 0.10
@@ -91,6 +98,18 @@ def update_wind_speed(prev: float, D: int, phi_seed: float, rng: np.random.Gener
 
 def update_wind_direction(prev: float, rng: np.random.Generator) -> float:
     return float((prev + rng.standard_normal() * _WIND_DIR_NOISE_SIGMA_DEG) % 360.0)
+
+
+def solar_derate_multiplier(state: WorldState) -> float:
+    """Per-hour solar-output multiplier from active weather events.
+
+    Returns `HEATWAVE_SOLAR_DERATE` (0.8) iff a heatwave sits in
+    `state.active_events`, else 1.0. Wind is unaffected.
+    """
+    for e in state.active_events:
+        if e.get("type") == "heatwave":
+            return HEATWAVE_SOLAR_DERATE
+    return 1.0
 
 
 def derive_phi_seed(world_seed: int) -> float:
