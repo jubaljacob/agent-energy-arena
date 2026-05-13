@@ -114,7 +114,7 @@ def _process_loads_kw(state: WorldState) -> float:
 
 
 def total_demand_kw(state: WorldState, h: int) -> float:
-    res = residential_kw(h, state.population) * heatwave_multiplier(state)
+    res = residential_kw(h, int(state.population)) * heatwave_multiplier(state)
     ic = (_industrial_kw(state) + _commercial_peak_kw(state) * commercial_factor(h)) * (
         demand_surprise_multiplier(state)
     )

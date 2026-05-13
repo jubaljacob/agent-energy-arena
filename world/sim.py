@@ -264,7 +264,7 @@ class World:
             day=0,
             hour=0,
             treasury=float(self.config.starting_cash),
-            population=int(self.config.starting_pop),
+            population=float(self.config.starting_pop),
             happiness=1.0,
             carbon_price=CARBON_PRICE_USD_PER_TON,
         )
@@ -575,7 +575,7 @@ class World:
             raise ValueError(f"days must be an int in [1, 7]; got {days!r}")
 
         treasury_start = self.state.treasury
-        pop_start = self.state.population
+        pop_start = int(self.state.population)
 
         for _ in range(days):
             self._advance_one_day()
@@ -588,7 +588,7 @@ class World:
                 "treasury_end": self.state.treasury,
                 "delta": self.state.treasury - treasury_start,
                 "population_start": pop_start,
-                "population_end": self.state.population,
+                "population_end": int(self.state.population),
                 "happiness": self.state.happiness,
                 "events_active": list(self.state.active_events),
             },
@@ -1035,7 +1035,7 @@ class World:
             "day": s.day,
             "hour": s.hour,
             "treasury": s.treasury,
-            "population": s.population,
+            "population": int(s.population),
             "employed": workforce_employed(s),
             "unemployed": workforce_unemployed(s),
             "happiness": s.happiness,

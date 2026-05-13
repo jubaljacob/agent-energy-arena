@@ -76,7 +76,7 @@ def employed(state: WorldState) -> int:
 
 
 def unemployed(state: WorldState) -> int:
-    return max(0, state.population - employed(state))
+    return max(0, int(state.population) - employed(state))
 
 
 def producers(state: WorldState) -> Iterable[Producer]:

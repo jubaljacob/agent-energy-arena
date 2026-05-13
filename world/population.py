@@ -1,4 +1,4 @@
-"""Population dynamics + daily tax revenue (brief §4.8).
+"""Population dynamics + daily tax revenue.
 
 A single end-of-day routine, `update_population(world)`, that:
 
@@ -7,15 +7,17 @@ A single end-of-day routine, `update_population(world)`, that:
      houses), a noise penalty from industrial/refinery tiles near
      houses (halved by an intervening park), prior-day blackout +
      brownout hours, and a coal-proximity term.
-  3. Selects exactly one of four cascading branches — grow, housing-exodus,
-     job-driven decline, or happiness decline — matching the brief's
-     pseudocode line-for-line.
-  4. Accrues `DAILY_TAX_PER_CAPITA × population` to the treasury and to
-     `state.today_summary_so_far["tax_revenue"]`.
+  3. Calls `happiness_velocity` (signed daily delta around the
+     neutral happiness fixed-point of 1.0) and `apply_structural_clamps`
+     (housing exodus + jobs floor backstops) as pure helpers.
+  4. Persists the new float population, triggers workforce churn on
+     integer transitions, accrues `DAILY_TAX_PER_CAPITA × int(pop)` to
+     the treasury.
 
-No RNG is consumed here; the determinism contract in `sim._advance_one_day`
-is unaffected as long as this is called *outside* the mandatory daily
-`sim_rng.standard_normal()` draw.
+Population is stored as a float on `WorldState` so fractional deltas
+accumulate across days; the `/state` and `/step` API serializers cast
+to int on the way out. No RNG is consumed here; the determinism
+contract in `sim._advance_one_day` is unaffected.
 """
 
 from __future__ import annotations
@@ -29,14 +31,49 @@ if TYPE_CHECKING:
 
 DAILY_TAX_PER_CAPITA: float = 4.0
 
-# Per-hour outage penalties. The brief's daily-aggregate
-# `-0.10 * (yest_blackout_hours / 24)` capped happiness loss at 0.10 even
-# under 24h/day blackouts, leaving population effectively immune. Per-hour
-# coefficients make the brief's "blackouts cost happiness" wording bite;
-# after the §3.3 smooth-growth rewrite the decline threshold is 0.3, so
-# 15h+ of blackout (0.05 × 15 = 0.75 → h≤0.25) trips the decline branch.
+# Per-hour outage penalties feeding the happiness term.
 BLACKOUT_HAPPINESS_PER_HOUR: float = 0.05
 BROWNOUT_HAPPINESS_PER_HOUR: float = 0.02
+
+# Velocity model anchors (PRD §"Implementation Decisions").
+HAPPINESS_NEUTRAL: float = 1.0
+
+
+def happiness_velocity(
+    pop: float,
+    happiness: float,
+    capacity: int,
+    jobs: int,
+    b: float = 0.012,
+    h_neutral: float = HAPPINESS_NEUTRAL,
+) -> float:
+    """Signed daily population delta from the happiness-velocity model.
+
+    `delta = b * pop * (happiness - h_neutral)`; positive deltas are
+    clamped by available housing and jobs headroom, negative deltas
+    are not clamped by structural state (an unhappy city sheds people
+    regardless of how much housing or how many jobs it has).
+    """
+    raw = b * pop * (happiness - h_neutral)
+    if raw <= 0:
+        return raw
+    cap_headroom = max(0.0, capacity - pop)
+    jobs_headroom = max(0.0, jobs - pop)
+    return min(raw, cap_headroom, jobs_headroom)
+
+
+def apply_structural_clamps(pop: float, capacity: int, jobs: int) -> float:
+    """Gradual housing exodus and jobs floor backstops.
+
+    Both clamps fire in sequence. Housing exodus caps the post-velocity
+    population at `max(capacity, pop - 5)` when `pop > capacity`. Jobs
+    floor caps at `max(jobs / 0.7, pop * 0.99)` when `jobs < 0.7 * pop`.
+    """
+    if pop > capacity:
+        pop = max(float(capacity), pop - 5.0)
+    if jobs < 0.7 * pop:
+        pop = max(jobs / 0.7, pop * 0.99)
+    return pop
 
 
 def update_population(world: World) -> None:
@@ -50,17 +87,11 @@ def update_population(world: World) -> None:
     house_count = len(houses)
     noise_sources = [t for t in state.tiles if t.type in ("industrial", "refinery")]
 
-    # Coal-proximity term: chebyshev distance ≤ 3 between any house and any
-    # operational coal plant. PRD §"Subsurface" pins chebyshev as the metric.
     coal_plants = [t for t in state.tiles if t.type == "coal_plant" and t.operational]
     coal_houses_within_3 = sum(
         1 for h in houses if any(max(abs(h.x - c.x), abs(h.y - c.y)) <= 3 for c in coal_plants)
     )
 
-    # Park benefit: per-house min(0.30, 0.10 * nearby_parks_within_chebyshev_2),
-    # averaged over houses. Noise penalty: per-house -0.03 per industrial/refinery
-    # within chebyshev-2, halved to -0.015 if any park sits within chebyshev-2 of
-    # both the house and the source. Averaged over houses.
     park_benefit = 0.0
     noise_penalty = 0.0
     if house_count > 0:
@@ -89,30 +120,30 @@ def update_population(world: World) -> None:
     happiness -= 0.05 * coal_houses_within_3 / max(1, house_count)
     happiness = max(0.0, min(1.5, happiness))
 
-    pop_before = state.population
-    pop = float(pop_before)
+    pop_before = float(state.population)
+    pop_before_int = int(pop_before)
 
-    if jobs >= pop and capacity > pop and happiness >= 0.3:
-        growth_multiplier = max(0.0, (happiness - 0.3) / 1.2)
-        growth = config.base_growth_rate * pop * growth_multiplier
-        growth = min(growth, capacity - pop, jobs - pop)
-        pop = pop + growth
-    elif capacity < pop:
-        pop = max(float(capacity), pop - 5.0)
-    elif jobs < 0.7 * pop:
-        pop = max(jobs / 0.7, pop * 0.99)
-    elif happiness < 0.3:
-        pop = pop * 0.99
+    delta = happiness_velocity(pop_before, happiness, capacity, jobs, b=config.base_growth_rate)
+    pop_after = pop_before + delta
+    pop_after = apply_structural_clamps(pop_after, capacity, jobs)
+    pop_after = max(0.0, pop_after)
 
-    target_pop = max(0, int(pop))
-    delta = pop_before - target_pop
-    if delta > 0:
-        workforce.drain_n(state, delta)
-    elif delta < 0:
-        state.population = target_pop
+    pop_after_int = int(pop_after)
+    delta_int = pop_after_int - pop_before_int
+
+    # Workforce hooks fire only on integer transitions. drain_n decrements
+    # state.population internally; reset to the int-valued float first so
+    # the silent/firing accounting reads cleanly, then overwrite with the
+    # precise float so fractional residue accumulates day-to-day.
+    if delta_int < 0:
+        state.population = float(pop_before_int)
+        workforce.drain_n(state, -delta_int)
+    state.population = pop_after
+    if delta_int > 0:
         workforce.hire_to_fill(state)
+
     state.happiness = happiness
 
-    tax = DAILY_TAX_PER_CAPITA * state.population
+    tax = DAILY_TAX_PER_CAPITA * int(state.population)
     state.treasury += tax
     state.today_summary_so_far["tax_revenue"] = tax

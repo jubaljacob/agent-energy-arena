@@ -94,7 +94,9 @@ class WorldState:
     day: int = 0
     hour: int = 0
     treasury: float = 0.0
-    population: int = 0
+    # Population is a float so sub-1/day deltas from the happiness-velocity
+    # model accumulate across days; API/UI consumers see int(...) on the wire.
+    population: float = 0.0
     happiness: float = 1.0
     tiles: list[Tile] = field(default_factory=list)
     wells: list[Well] = field(default_factory=list)

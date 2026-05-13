@@ -33,7 +33,9 @@ def test_scripted_completes_full_game() -> None:
     world = _play(seed=42)
     assert world.day == world.config.game_days
     # Pop and treasury are real numbers (no NaN bleed-through).
-    assert isinstance(world.state.population, int)
+    # population is float-typed on WorldState (happiness-population-driver #01);
+    # the /state wire surface casts to int.
+    assert isinstance(world.state.population, float)
     assert world.state.population >= 0
 
 
@@ -69,8 +71,10 @@ def test_scripted_matches_committed_baseline() -> None:
     P_actual = float(world.state.population)
     T_actual = float(world.state.treasury) - float(world.config.starting_cash)
 
-    # Population is integer-truncated; absolute equality is the right gate.
-    assert P_actual == p_ref, f"population drift: actual={P_actual}, baseline={p_ref}"
+    # Population is float-typed (happiness-population-driver #01). Integer
+    # equality on the wire-cast value is the right gate; fractional drift is
+    # ignored.
+    assert int(P_actual) == int(p_ref), f"population drift: actual={P_actual}, baseline={p_ref}"
 
     # Treasury is float; small numerical jitter is conceivable. 5% per AC.
     assert abs(T_actual - t_ref) / max(abs(t_ref), 1.0) < 0.05, (

@@ -375,8 +375,10 @@ def test_blackout_decrements_treasury_per_hour() -> None:
     expected_penalty = 24 * w.config.blackout_penalty_hour
     assert w.state.today_summary_so_far["blackout_penalty"] == pytest.approx(expected_penalty)
     # Net treasury delta = -penalty + tax_revenue (no plants → no opex/fuel/
-    # power_revenue). Pop dropped 100 → 99 by job-decline; tax = 99 × $4 = 396.
-    expected_delta = -expected_penalty + 99 * 4.0
+    # power_revenue). Pop drops under the happiness-velocity model:
+    # h=0 (24h blackout clipped) → velocity = 0.012·100·-1 = -1.2 → 98.8.
+    # Then jobs floor fires: max(30/0.7, 98.8·0.99) = 97.812. int = 97.
+    expected_delta = -expected_penalty + 97 * 4.0
     assert w.state.treasury - treasury_before == pytest.approx(expected_delta)
 
 
