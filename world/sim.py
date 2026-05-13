@@ -47,6 +47,7 @@ from world.power import (
     total_demand_kw,
 )
 from world.pricing import update_civic_revenue
+from world.scenario import NullScenario, Scenario
 from world.state import Tile, Well, WorldState
 from world.subsurface import (
     CRUDE_PRICE_USD_PER_BBL,
@@ -213,9 +214,16 @@ class StepSummary:
 
 
 class World:
-    def __init__(self, config: Config | None = None, *, session: str = "agent") -> None:
+    def __init__(
+        self,
+        config: Config | None = None,
+        *,
+        session: str = "agent",
+        scenario: Scenario | None = None,
+    ) -> None:
         self.config: Config = config or load_config()
         self.session: str = session
+        self.scenario: Scenario = scenario if scenario is not None else NullScenario()
         self.state: WorldState = WorldState(seed=self.config.world_seed)
         self.sim_rng: np.random.Generator
         self.forecast_rng: np.random.Generator
@@ -245,8 +253,10 @@ class World:
 
     # -- Lifecycle ---------------------------------------------------------
 
-    def reset(self, seed: int | None = None) -> None:
+    def reset(self, seed: int | None = None, *, scenario: Scenario | None = None) -> None:
         seed_used = self.config.world_seed if seed is None else int(seed)
+        if scenario is not None:
+            self.scenario = scenario
         master = np.random.SeedSequence(seed_used)
         # Three independent streams: sim drives world dynamics (weather, etc.),
         # forecast drives /forecast noise, event drives the slice-11 daily
@@ -626,6 +636,13 @@ class World:
         #    filters non-operational plants
         #  - regulatory_tightening: bumps state.carbon_price immediately.
         expire_finite_events(self)
+        # Scenario hook (open-source-arena slice 02). Called once per day
+        # AFTER expiry and BEFORE the stochastic sampler, so a scenario-
+        # injected event (heatwave, plant_failure, ...) on the same day
+        # suppresses a stochastic roll of the same type via the existing
+        # "already active" guard in `sample_and_apply_events`. The default
+        # NullScenario is a no-op, so determinism is preserved.
+        self.scenario.apply(self, self.state.day)
         sample_and_apply_events(self)
 
         # Per-hour traces for the most-recently-completed day. Reset here and

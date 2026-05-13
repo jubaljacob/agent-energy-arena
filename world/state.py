@@ -147,6 +147,16 @@ class WorldState:
     last_day_demand_kw_by_hour: list[float] = field(default_factory=list)
     last_day_balance_state_by_hour: list[str] = field(default_factory=list)
 
+    # Scenario hook (open-source-arena slice 02). `weather_overrides` is a
+    # transient per-hour dict consulted by `world.weather.step_weather_one_hour`
+    # AFTER the AR(1) updates: any key present wins over the AR(1) value for
+    # this hour. Scenarios re-write keys each day in their `apply` if they
+    # want a sustained clip; an unset key falls through to the AR(1) value.
+    # `scenario_trace` is an append-only log of what fired and when, for the
+    # recorder; structure is owned by the scenario author.
+    weather_overrides: dict[str, float] = field(default_factory=dict)
+    scenario_trace: list[dict[str, Any]] = field(default_factory=list)
+
     today_summary_so_far: dict[str, float] = field(
         default_factory=lambda: {
             "tax_revenue": 0.0,

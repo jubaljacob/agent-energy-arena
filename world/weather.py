@@ -138,7 +138,24 @@ def step_weather_one_hour(world: World) -> None:
     )
     wind_dir = update_wind_direction(state.weather_now["wind_direction_deg"], world.sim_rng)
 
+    # Scenario hook (open-source-arena slice 02). After the AR(1) updates,
+    # any key present in `state.weather_overrides` wins. The override is
+    # consulted per-hour, so a scenario that wants a sustained clip
+    # re-writes the key each day in its `apply`. RNG draws above are
+    # unconditional, so determinism is preserved regardless of overrides.
+    overrides = state.weather_overrides
+    if overrides:
+        if "cloud_factor" in overrides:
+            cloud = float(overrides["cloud_factor"])
+        if "wind_speed_mps" in overrides:
+            wind_v = float(overrides["wind_speed_mps"])
+        if "wind_direction_deg" in overrides:
+            wind_dir = float(overrides["wind_direction_deg"])
+
     state.weather_now["cloud_factor"] = cloud
     state.weather_now["wind_speed_mps"] = wind_v
     state.weather_now["wind_direction_deg"] = wind_dir
-    state.weather_now["solar_irradiance"] = irradiance(D, h, cloud)
+    solar = irradiance(D, h, cloud)
+    if overrides and "solar_irradiance" in overrides:
+        solar = float(overrides["solar_irradiance"])
+    state.weather_now["solar_irradiance"] = solar
