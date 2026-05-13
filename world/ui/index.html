@@ -13,7 +13,17 @@
     <div class="metric"><span class="label">Happiness</span><span id="happiness">—</span></div>
     <div class="metric"><span class="label">Balance</span><span id="balance" class="balance-badge">—</span></div>
     <button id="next-day">Next Day</button>
+    <button id="load-run" title="Load a recorded run folder (metadata.json + states.jsonl)">Load run</button>
+    <input id="replay-files" type="file" webkitdirectory directory multiple hidden />
   </header>
+  <div id="replaybar" class="replay-bar hidden">
+    <span id="replay-badge" class="replay-badge">(no run loaded)</span>
+    <button id="replay-back" title="Step back (← key)">← Step back</button>
+    <input id="replay-slider" type="range" min="0" max="0" value="0" />
+    <span id="replay-day-label" class="replay-day-label">Day — / —</span>
+    <button id="replay-forward" title="Step forward (→ key)">Step forward →</button>
+    <button id="replay-close">Close replay</button>
+  </div>
   <nav id="tabs">
     <button class="tab active" data-tab="map">Map</button>
     <button class="tab" data-tab="wells">Wells</button>

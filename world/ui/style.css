@@ -30,6 +30,64 @@ body {
   cursor: pointer;
 }
 #next-day:disabled { color: #8b8f9a; cursor: not-allowed; }
+#load-run {
+  padding: 0.5rem 0.75rem;
+  background: #1f2228;
+  color: #e6e7ea;
+  border: 1px solid #393d46;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+#load-run:hover { background: #2a2d34; }
+
+.replay-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: #1a1c22;
+  border-bottom: 1px solid #2a2d34;
+  font-size: 0.85rem;
+}
+.replay-bar.hidden { display: none; }
+.replay-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  color: #b0e8c8;
+  background: #1d3a25;
+  padding: 0.25rem 0.5rem;
+  border-radius: 3px;
+  white-space: nowrap;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#replay-slider { flex: 1; min-width: 120px; }
+.replay-day-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #e6e7ea;
+  min-width: 9rem;
+  text-align: center;
+}
+.replay-bar button {
+  padding: 0.3rem 0.6rem;
+  background: #2a2d34;
+  color: #e6e7ea;
+  border: 1px solid #393d46;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.replay-bar button:hover { background: #393d46; }
+.replay-bar button:disabled { color: #5a5d65; cursor: not-allowed; }
+
+body.replay-mode #next-day,
+body.replay-mode #buildlist .buildItem,
+body.replay-mode #sublist .modeItem {
+  opacity: 0.4;
+  pointer-events: none;
+}
 main {
   padding: 1rem;
   display: flex;

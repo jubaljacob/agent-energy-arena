@@ -29,6 +29,29 @@
   const hoverPopupEl = document.getElementById("hover-popup");
   const canvasRowEl = document.getElementById("canvasrow");
 
+  // Replay mode (issue 09). Live mode polls `/state` via `tick()`; replay
+  // mode renders end-of-day snapshots out of an in-memory `states` array
+  // loaded from a recorded run folder (`metadata.json` + `states.jsonl`).
+  // The two modes share the same render helpers — only the data source
+  // and the mutating-action gates differ.
+  const replay = {
+    mode: "live",   // "live" | "replay"
+    states: [],     // parsed states.jsonl entries
+    metadata: null, // parsed metadata.json (or null if missing)
+    cursor: 0,
+  };
+  const loadRunBtn = document.getElementById("load-run");
+  const replayFilesInput = document.getElementById("replay-files");
+  const replayBarEl = document.getElementById("replaybar");
+  const replayBadgeEl = document.getElementById("replay-badge");
+  const replaySliderEl = document.getElementById("replay-slider");
+  const replayDayLabelEl = document.getElementById("replay-day-label");
+  const replayBackBtn = document.getElementById("replay-back");
+  const replayForwardBtn = document.getElementById("replay-forward");
+  const replayCloseBtn = document.getElementById("replay-close");
+
+  function isReplay() { return replay.mode === "replay"; }
+
   // Refinery process-load is 200 kWh/bbl (slice 09). Per-day kWh for the
   // hover popup = throughput × kWh/bbl. CO2 intensity is 0.3 t/bbl (slice 10).
   const REFINERY_KWH_PER_BBL = 200;
@@ -933,6 +956,7 @@
   }
 
   canvas.addEventListener("click", async (ev) => {
+    if (isReplay()) return;
     const { x, y } = gridCellFromEvent(ev);
     if (mode === "survey") {
       await handleSurveyClick(x, y);
@@ -960,6 +984,7 @@
 
   canvas.addEventListener("contextmenu", async (ev) => {
     ev.preventDefault();
+    if (isReplay()) return;
     // While a subsurface mode is active, right-click cancels the mode and
     // does NOT fall through to /demolish.
     if (mode === "survey" || mode === "drill") {
@@ -1083,6 +1108,7 @@
   }
 
   nextDayBtn.addEventListener("click", async () => {
+    if (isReplay()) return;
     nextDayBtn.disabled = true;
     try {
       await fetch("/step", {
@@ -1417,6 +1443,7 @@
   const financeListEl = document.getElementById("financelist");
 
   async function setRefineryRate(refineryId, rate) {
+    if (isReplay()) return;
     try {
       await fetch("/control/refinery", {
         method: "POST",
@@ -1458,7 +1485,7 @@
           <td>${idCell}</td>
           <td>(${r.x}, ${r.y})</td>
           <td>
-            <input type="range" min="0" max="${REFINERY_MAX_BBL_DAY}" step="10" value="${setpoint}" data-id="${r.id}" />
+            <input type="range" min="0" max="${REFINERY_MAX_BBL_DAY}" step="10" value="${setpoint}" data-id="${r.id}" ${isReplay() ? "disabled" : ""} />
             <span class="setpoint-val">${Math.round(setpoint)}</span>
           </td>
           <td class="actual">${throughput.toFixed(1)}</td>
@@ -1507,6 +1534,7 @@
   }
 
   async function setWellRate(wellId, rate) {
+    if (isReplay()) return;
     try {
       await fetch("/control/well", {
         method: "POST",
@@ -1575,7 +1603,7 @@
           <td>${w.type}</td>
           <td>(${w.x}, ${w.y}, ${w.target_z})</td>
           <td>
-            <input type="range" min="0" max="200" step="5" value="${setpoint}" data-id="${w.id}" />
+            <input type="range" min="0" max="200" step="5" value="${setpoint}" data-id="${w.id}" ${isReplay() ? "disabled" : ""} />
             <span class="setpoint-val">${Math.round(setpoint)}</span>
           </td>
           <td class="actual">${(w.current_rate_bbl_day || 0).toFixed(1)}</td>
@@ -1725,67 +1753,240 @@
     }
   }
 
+  function applyStateSnapshot(s, { fromReplay = false } = {}) {
+    cols = s.config.world_w;
+    rows = s.config.world_h;
+    worldDims = { w: s.config.world_w, h: s.config.world_h, d: s.config.world_d };
+    if (subSliceEl && !subSliceEl.dataset.bounded) {
+      subSliceEl.max = String(Math.max(0, worldDims.w - 1));
+      subSliceEl.dataset.bounded = "1";
+    }
+    tiles = s.tiles || [];
+    wells = s.wells || [];
+    orphanWellIds = new Set(s.orphan_well_ids || []);
+    orphanRefineryIds = new Set(s.orphan_refinery_ids || []);
+    reservoirsSummary = s.reservoirs_summary || [];
+    activeEvents = s.active_events || [];
+    historicalEvents = s.historical_events || [];
+    summary = s.today_summary_so_far || {};
+    treasury = s.treasury;
+    els.day.textContent = s.day;
+    els.treasury.textContent = Math.round(s.treasury).toLocaleString();
+    els.population.textContent = `${s.unemployed}/${s.population}`;
+    els.happiness.textContent = s.happiness.toFixed(2);
+    const balanceState = (s.power_now && s.power_now.balance_state) || "—";
+    els.balance.textContent = balanceState;
+    els.balance.className = `balance-badge ${balanceState}`;
+    renderPowerChart(
+      s.next_24h_preview,
+      {
+        supply: s.last_day_supply_kw_by_hour,
+        demand: s.last_day_demand_kw_by_hour,
+      }
+    );
+    renderPowerMargin(s.next_24h_preview);
+    renderPlantList(tiles);
+    renderWells();
+    renderRefineries();
+    renderFinance();
+    renderEvents(s.day);
+    drawGrid();
+    // Subsurface rendering. In live mode we re-fetch /reservoirs only when
+    // the material inputs changed (avoids tearing down in-flight voxel
+    // picks). In replay mode there is no server to fetch from, so we use
+    // the recorded snapshot's embedded `reservoirs_revealed.voxels` (top
+    // 10 by oil estimate — same shape /reservoirs returns).
+    const rr = s.reservoirs_revealed || {};
+    const revealedCount = rr.n_revealed_voxels || 0;
+    const wellsCount = wells.length;
+    const subsurfaceDirty =
+      revealedCount !== _lastRevealedCount
+      || wellsCount !== _lastWellsCount
+      || fromReplay;
+    if (subsurfaceDirty) {
+      if (fromReplay) {
+        revealedVoxels = rr.voxels || [];
+        renderSubsurface();
+      } else {
+        // Live mode: refresh from /reservoirs (covers top_k=4096, not just
+        // the embedded top-10 summary).
+        refreshRevealed().then(() => renderSubsurface());
+      }
+      _lastRevealedCount = revealedCount;
+      _lastWellsCount = wellsCount;
+    }
+  }
+
   async function tick() {
+    if (isReplay()) return;
     try {
       const res = await fetch("/state");
       if (!res.ok) return;
       const s = await res.json();
-      cols = s.config.world_w;
-      rows = s.config.world_h;
-      worldDims = { w: s.config.world_w, h: s.config.world_h, d: s.config.world_d };
-      if (subSliceEl && !subSliceEl.dataset.bounded) {
-        subSliceEl.max = String(Math.max(0, worldDims.w - 1));
-        subSliceEl.dataset.bounded = "1";
-      }
-      tiles = s.tiles || [];
-      wells = s.wells || [];
-      orphanWellIds = new Set(s.orphan_well_ids || []);
-      orphanRefineryIds = new Set(s.orphan_refinery_ids || []);
-      reservoirsSummary = s.reservoirs_summary || [];
-      activeEvents = s.active_events || [];
-      historicalEvents = s.historical_events || [];
-      summary = s.today_summary_so_far || {};
-      treasury = s.treasury;
-      els.day.textContent = s.day;
-      els.treasury.textContent = Math.round(s.treasury).toLocaleString();
-      els.population.textContent = `${s.unemployed}/${s.population}`;
-      els.happiness.textContent = s.happiness.toFixed(2);
-      const balanceState = (s.power_now && s.power_now.balance_state) || "—";
-      els.balance.textContent = balanceState;
-      els.balance.className = `balance-badge ${balanceState}`;
-      renderPowerChart(
-        s.next_24h_preview,
-        {
-          supply: s.last_day_supply_kw_by_hour,
-          demand: s.last_day_demand_kw_by_hour,
-        }
-      );
-      renderPowerMargin(s.next_24h_preview);
-      renderPlantList(tiles);
-      renderWells();
-      renderRefineries();
-      renderFinance();
-      renderEvents(s.day);
-      drawGrid();
-      // The subsurface widget is always on screen; refresh only when the
-      // material inputs (revealed voxels, wells) actually changed, so the
-      // re-render doesn't tear down in-flight voxel-pick interactions.
-      const rr = s.reservoirs_revealed || {};
-      const revealedCount = rr.n_revealed_voxels || 0;
-      const wellsCount = wells.length;
-      const subsurfaceDirty =
-        revealedCount !== _lastRevealedCount
-        || wellsCount !== _lastWellsCount;
-      if (subsurfaceDirty) {
-        await refreshRevealed();
-        renderSubsurface();
-        _lastRevealedCount = revealedCount;
-        _lastWellsCount = wellsCount;
-      }
+      applyStateSnapshot(s);
     } catch (err) {
       // Server may not be up yet during boot; the next user action will retry.
     }
   }
+
+  function renderReplayFrame(index) {
+    if (!replay.states.length) return;
+    const clamped = Math.max(0, Math.min(replay.states.length - 1, index));
+    replay.cursor = clamped;
+    const entry = replay.states[clamped];
+    const state = entry && entry.state;
+    if (!state) return;
+    applyStateSnapshot(state, { fromReplay: true });
+    updateReplayUi();
+  }
+
+  function updateReplayUi() {
+    if (!replayBarEl) return;
+    const total = replay.states.length;
+    const visible = isReplay();
+    replayBarEl.classList.toggle("hidden", !visible);
+    if (!visible) return;
+    if (total === 0) {
+      replayDayLabelEl.textContent = "no recorded days";
+      replaySliderEl.hidden = true;
+      replayBackBtn.hidden = true;
+      replayForwardBtn.hidden = true;
+    } else {
+      replaySliderEl.hidden = false;
+      replayBackBtn.hidden = false;
+      replayForwardBtn.hidden = false;
+      replaySliderEl.disabled = false;
+      replaySliderEl.min = "0";
+      replaySliderEl.max = String(total - 1);
+      replaySliderEl.value = String(replay.cursor);
+      const entry = replay.states[replay.cursor];
+      const dayNum = entry && entry.day != null ? entry.day : replay.cursor + 1;
+      replayDayLabelEl.textContent = `Day ${dayNum} / ${replay.states[total - 1].day || total}`;
+      replayBackBtn.disabled = replay.cursor <= 0;
+      replayForwardBtn.disabled = replay.cursor >= total - 1;
+    }
+    const md = replay.metadata || {};
+    const scenario = md.scenario == null ? "(none)" : md.scenario;
+    const seed = md.seed != null ? md.seed : "—";
+    const session = md.session || "—";
+    const runId = md.run_id || "(metadata unavailable)";
+    replayBadgeEl.textContent = `scenario: ${scenario} · seed: ${seed} · session: ${session} · run_id: ${runId}`;
+  }
+
+  function setReplayMode(next) {
+    replay.mode = next;
+    if (next === "replay") {
+      document.body.classList.add("replay-mode");
+      // Cancel any active build/survey/drill interaction mode.
+      if (mode) setMode(null);
+    } else {
+      document.body.classList.remove("replay-mode");
+    }
+    updateReplayUi();
+  }
+
+  function closeReplay() {
+    replay.states = [];
+    replay.metadata = null;
+    replay.cursor = 0;
+    setReplayMode("live");
+    // Force a re-fetch so the live view's voxel cache repopulates.
+    _lastRevealedCount = -1;
+    _lastWellsCount = -1;
+    tick();
+  }
+
+  function replayStepBy(delta) {
+    if (!isReplay() || !replay.states.length) return;
+    renderReplayFrame(replay.cursor + delta);
+  }
+
+  async function loadReplayFromFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+    const findByName = (name) => files.find((f) => {
+      const rel = f.webkitRelativePath || f.name;
+      return rel === name || rel.endsWith("/" + name);
+    });
+    const statesFile = findByName("states.jsonl");
+    const metadataFile = findByName("metadata.json");
+    if (!statesFile) {
+      showToast("no states.jsonl in selected folder", "error");
+      return;
+    }
+    let metadata = null;
+    if (metadataFile) {
+      try {
+        const text = await metadataFile.text();
+        metadata = JSON.parse(text);
+      } catch (err) {
+        showToast("metadata.json parse failed — continuing without it", "error");
+        metadata = null;
+      }
+    }
+    let statesText;
+    try {
+      statesText = await statesFile.text();
+    } catch (err) {
+      showToast("could not read states.jsonl", "error");
+      return;
+    }
+    const lines = statesText.split("\n");
+    const parsed = [];
+    let badCount = 0;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        parsed.push(JSON.parse(trimmed));
+      } catch (err) {
+        badCount += 1;
+      }
+    }
+    replay.states = parsed;
+    replay.metadata = metadata;
+    replay.cursor = parsed.length > 0 ? parsed.length - 1 : 0;
+    setReplayMode("replay");
+    if (badCount > 0) {
+      showToast(`skipped ${badCount} unparseable state line(s)`, "error");
+    } else if (parsed.length === 0) {
+      showToast("no recorded days in states.jsonl", "error");
+    } else {
+      showToast(`loaded ${parsed.length} day(s)`, "ok");
+    }
+    if (parsed.length > 0) renderReplayFrame(replay.cursor);
+  }
+
+  if (loadRunBtn && replayFilesInput) {
+    loadRunBtn.addEventListener("click", () => replayFilesInput.click());
+    replayFilesInput.addEventListener("change", async (ev) => {
+      await loadReplayFromFiles(ev.target.files);
+      // Reset the input so re-picking the same folder fires the change event.
+      ev.target.value = "";
+    });
+  }
+  if (replaySliderEl) {
+    replaySliderEl.addEventListener("input", () => {
+      const idx = parseInt(replaySliderEl.value, 10);
+      if (!isNaN(idx)) renderReplayFrame(idx);
+    });
+  }
+  if (replayBackBtn) replayBackBtn.addEventListener("click", () => replayStepBy(-1));
+  if (replayForwardBtn) replayForwardBtn.addEventListener("click", () => replayStepBy(1));
+  if (replayCloseBtn) replayCloseBtn.addEventListener("click", () => closeReplay());
+
+  window.addEventListener("keydown", (ev) => {
+    if (!isReplay()) return;
+    const tag = (ev.target && ev.target.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (ev.key === "ArrowLeft") {
+      ev.preventDefault();
+      replayStepBy(-1);
+    } else if (ev.key === "ArrowRight") {
+      ev.preventDefault();
+      replayStepBy(1);
+    }
+  });
 
   let _lastRevealedCount = -1;
   let _lastWellsCount = -1;
