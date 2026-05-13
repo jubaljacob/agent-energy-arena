@@ -67,8 +67,15 @@ def _make_inprocess_client(
     """Build an in-process API client + world + log.  No uvicorn, no socket."""
     from fastapi.testclient import TestClient
 
-    world = World()
-    log = ActionLog(root=runs_root) if runs_root is not None else ActionLog()
+    # open-source-arena slice 03: pin the world's recorder + the action
+    # log to the SAME run folder so `metadata.json`, `states.jsonl`,
+    # `final.json`, and `actions.jsonl` live side-by-side. Replay (-r
+    # cmd_replay) passes a sibling temp dir so the original run is
+    # preserved verbatim.
+    root = str(runs_root) if runs_root is not None else "runs"
+    world = World(runs_root=root)
+    run_id = world.recorder.run_id if world.recorder is not None else None
+    log = ActionLog(root=root, run_id=run_id)
     app = create_app(world=world, action_log=log)
     return ApiClient(transport=TestClient(app)), world, log
 
@@ -141,6 +148,7 @@ def _dispatch(api: ApiClient, endpoint: str, params: dict[str, Any]) -> Any:
 
 def cmd_eval(module_name: str, seed: int, api_url: str | None) -> int:
     AgentCls = _load_agent_class(module_name)
+    world: World | None = None
     if api_url:
         api = ApiClient(base_url=api_url)
         # When running against a live world we don't own the action log
@@ -149,11 +157,18 @@ def cmd_eval(module_name: str, seed: int, api_url: str | None) -> int:
         run_dir = Path("runs") / f"live-{seed}"
         run_dir.mkdir(parents=True, exist_ok=True)
     else:
-        api, _world, log = _make_inprocess_client()
-        run_dir = log.dir
+        api, world, _log = _make_inprocess_client()
+        # play_game starts with /reset, which reallocates the recorder's
+        # run folder. We resolve `run_dir` AFTER play_game so the path
+        # reflects the post-reset folder rather than the stale
+        # construction-time one.
+        run_dir = _log.dir  # tentative; reassigned below after play_game
 
     agent = AgentCls(api, seed=seed)
     final_state = agent.play_game()
+
+    if world is not None and world.recorder is not None:
+        run_dir = world.recorder.dir
 
     (run_dir / "final_state.json").write_text(
         json.dumps(final_state, sort_keys=True, default=str) + "\n"

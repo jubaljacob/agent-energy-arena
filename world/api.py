@@ -86,11 +86,35 @@ class BatteryControlBody(BaseModel):
     charge_kw: float
 
 
-def create_app(world: World | None = None, action_log: ActionLog | None = None) -> FastAPI:
+def create_app(
+    world: World | None = None,
+    action_log: ActionLog | None = None,
+    *,
+    runs_root: str = "runs",
+) -> FastAPI:
     app = FastAPI(title="Energy-AI Nexus", version="0.1.0")
 
-    app.state.world = world or World()
-    app.state.action_log = action_log or ActionLog()
+    # When no World is provided, allocate one wired to the canonical
+    # `runs/` root so the recorder (slice 03) writes metadata + per-day
+    # state + final.json. The default ActionLog then lands its
+    # `actions.jsonl` inside the recorder's run folder so a single run
+    # directory holds every artifact for the session.
+    if world is None:
+        world = World(runs_root=runs_root)
+    if action_log is None:
+        run_id = world.recorder.run_id if world.recorder is not None else None
+        action_log = ActionLog(root=runs_root, run_id=run_id)
+    app.state.world = world
+    app.state.action_log = action_log
+    # When the world owns a recorder, /reset reallocates the run folder
+    # under it — actions.jsonl must follow so a single run dir holds
+    # every artifact for the post-reset session. This flag is set only
+    # for callers that took the default `action_log` path; callers who
+    # passed their own ActionLog have explicit lifecycle control.
+    app.state._action_log_follows_recorder = action_log is not None and (
+        world.recorder is not None and action_log.dir == world.recorder.dir
+    )
+    app.state._runs_root = runs_root
 
     @app.get("/seed")
     def get_seed() -> dict[str, int]:
@@ -140,6 +164,19 @@ def create_app(world: World | None = None, action_log: ActionLog | None = None) 
                 "treasury_after": app.state.world.state.treasury,
                 "result": {"seed": app.state.world.state.seed, "day": 0},
             }
+            # If the action log was co-located with the (now-finalized)
+            # recorder, rebind it to the fresh recorder's folder so the
+            # post-reset session keeps actions.jsonl alongside the new
+            # states.jsonl / metadata.json / final.json. Callers who
+            # passed their own ActionLog stay where they put it.
+            if (
+                getattr(app.state, "_action_log_follows_recorder", False)
+                and app.state.world.recorder is not None
+            ):
+                app.state.action_log = ActionLog(
+                    root=app.state._runs_root,
+                    run_id=app.state.world.recorder.run_id,
+                )
             app.state.action_log.append("/reset", params, ok=True, result=result["result"])
             return result
         except Exception as exc:  # pragma: no cover - defensive

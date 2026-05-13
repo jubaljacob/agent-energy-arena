@@ -51,6 +51,7 @@ from world.pricing import (
     INDUSTRIAL_REVENUE_PER_DAY,
     update_civic_revenue,
 )
+from world.recorder import Recorder
 from world.scenario import NullScenario, Scenario
 from world.state import Tile, Well, WorldState
 from world.subsurface import (
@@ -209,6 +210,21 @@ def _well_to_dict(w: Well, world: World) -> dict[str, Any]:
     }
 
 
+def _scenario_dotted_path(scenario: Scenario) -> str | None:
+    """Best-effort dotted-path for a Scenario instance for metadata.json.
+
+    Returns `None` for the default `NullScenario`; otherwise returns
+    `"module.ClassName"`. Issue 04 will plumb the actual dotted path
+    used by `load_scenario` through World so this fallback is bypassed
+    for API-attached scenarios — until then, the class lookup is the
+    best we can do.
+    """
+    if isinstance(scenario, NullScenario):
+        return None
+    cls = type(scenario)
+    return f"{cls.__module__}.{cls.__name__}"
+
+
 @dataclass
 class StepSummary:
     ok: bool
@@ -224,10 +240,18 @@ class World:
         *,
         session: str = "agent",
         scenario: Scenario | None = None,
+        runs_root: str | None = None,
     ) -> None:
         self.config: Config = config or load_config()
         self.session: str = session
         self.scenario: Scenario = scenario if scenario is not None else NullScenario()
+        # open-source-arena slice 03: optional per-game state log. When
+        # `runs_root` is set, every reset allocates a fresh `Recorder`
+        # and the in-progress one (if any) is finalized first — no run
+        # is destroyed by a reset. Tests pass `runs_root=None` to skip
+        # filesystem side effects; api.py / evaluate.py pass "runs".
+        self.runs_root: str | None = runs_root
+        self.recorder: Recorder | None = None
         self.state: WorldState = WorldState(seed=self.config.world_seed)
         self.sim_rng: np.random.Generator
         self.forecast_rng: np.random.Generator
@@ -261,6 +285,18 @@ class World:
         seed_used = self.config.world_seed if seed is None else int(seed)
         if scenario is not None:
             self.scenario = scenario
+        # open-source-arena slice 03: close out any in-progress recorder
+        # before allocating a fresh one. Calling finalize on a recorder
+        # that has been finalized already is a no-op (idempotent).
+        if self.recorder is not None:
+            self.recorder.finalize(self)
+        if self.runs_root is not None:
+            self.recorder = Recorder(
+                root=self.runs_root,
+                seed=seed_used,
+                scenario_name=_scenario_dotted_path(self.scenario),
+                session=self.session,
+            )
         master = np.random.SeedSequence(seed_used)
         # Three independent streams: sim drives world dynamics (weather, etc.),
         # forecast drives /forecast noise, event drives the slice-11 daily
@@ -1037,6 +1073,14 @@ class World:
         # Population dynamics + tax revenue (brief §4.8). Deterministic; no
         # RNG draws, so the sim_rng contract is unaffected.
         update_population(self)
+
+        # Recorder hook (open-source-arena slice 03). Pin one
+        # `states.jsonl` entry per simulated day BEFORE the day counter
+        # increments, so the embedded `state_dict()` reflects the end
+        # of day N. `today_summary_so_far` is the just-completed day's
+        # P&L. No-op when running without a runs_root (tests).
+        if self.recorder is not None:
+            self.recorder.record_step(self, self.state.day)
 
         self.state.day += 1
         self.state.hour = 0
