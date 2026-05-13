@@ -17,11 +17,12 @@ for ((i=1; i<=$1; i++)); do
   trap "rm -f $tmpfile" EXIT
 
   commits=$(git log -n 5 --format="%H%n%ad%n%B---" --date=short 2>/dev/null || echo "No commits found")
-  issues=$(cat issues/*.md 2>/dev/null || echo "No issues found")
+  issues=$(cat .scratch/*/issues/*.md 2>/dev/null || echo "No issues found")
   prompt=$(cat ralph/prompt.md)
 
   docker sandbox run claude . -- \
     --verbose \
+    --dangerously-skip-permissions \
     --print \
     --output-format stream-json \
     "Previous commits: $commits Issues: $issues $prompt" \

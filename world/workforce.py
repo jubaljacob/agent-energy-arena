@@ -79,6 +79,24 @@ def unemployed(state: WorldState) -> int:
     return max(0, int(state.population) - employed(state))
 
 
+def total_jobs(state: WorldState) -> int:
+    """Job slots across tiles + wells.
+
+    Tiles carry a build-time snapshot in ``Tile.jobs`` (see ``state.py``); we
+    use that so retunes don't retroactively shift live cities. Wells have no
+    ``.jobs`` field on the dataclass, so they read from the catalog via
+    ``_spec_jobs``. The sum stays consistent with ``employed()``, which is
+    why the agent-facing ``jobs_vacant`` field and the growth model in
+    ``world.population`` both call this rather than rolling their own sum.
+    """
+    total = 0
+    for t in state.tiles:
+        total += t.jobs
+    for w in state.wells:
+        total += _spec_jobs(w)
+    return total
+
+
 def producers(state: WorldState) -> Iterable[Producer]:
     """Yield staffable tiles and wells sorted by ``(creation_day, id)``."""
     items: list[Producer] = []

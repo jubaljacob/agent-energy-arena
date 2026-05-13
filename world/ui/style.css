@@ -20,7 +20,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-#next-day {
+#next-day, #prev-day {
   padding: 0.5rem 1rem;
   background: #2a2d34;
   color: #e6e7ea;
@@ -28,8 +28,19 @@ body {
   border-radius: 4px;
   cursor: pointer;
 }
-#next-day:disabled { color: #8b8f9a; cursor: not-allowed; }
-#play-btn, #fast-btn, #pause-btn {
+#next-day:disabled, #prev-day:disabled { color: #8b8f9a; cursor: not-allowed; }
+/* Visual cue while peeking at a recorded prior day: top-bar shows a tint
+   and the day number badges as "peeking". Mutating buttons are disabled
+   so a stray click can't fire a build/drill against the live world while
+   the UI is showing day N-k. */
+body.peeking #topbar { border-bottom-color: #4ea3ff; }
+body.peeking #day { color: #4ea3ff; }
+body.peeking #buildlist .buildItem,
+body.peeking #sublist .modeItem {
+  pointer-events: none;
+  opacity: 0.45;
+}
+#play-btn, #fast-btn {
   padding: 0.5rem 0.75rem;
   background: #2a2d34;
   color: #e6e7ea;
@@ -39,13 +50,13 @@ body {
   font-size: 0.85rem;
 }
 #play-btn { margin-left: auto; }
-#play-btn:hover, #fast-btn:hover, #pause-btn:hover { background: #393d46; }
+#play-btn:hover, #fast-btn:hover { background: #393d46; }
 #play-btn.active, #fast-btn.active {
   background: #1d3a25;
   border-color: #4ea3ff;
   color: #b0e8c8;
 }
-#play-btn:disabled, #fast-btn:disabled, #pause-btn:disabled {
+#play-btn:disabled, #fast-btn:disabled {
   color: #8b8f9a; cursor: not-allowed;
 }
 #load-run {
@@ -419,6 +430,7 @@ main {
 .plantrow.wind_turbine .pl-bar-fill { background: #6dd5ed; }
 .plantrow.coal_plant .pl-bar-fill { background: #c97676; }
 .plantrow.gas_peaker .pl-bar-fill { background: #d09bff; }
+.plantrow.battery .pl-bar-fill { background: #7be0a3; }
 .plantrow .pl-val { text-align: right; color: #8b8f9a; font-variant-numeric: tabular-nums; grid-column: 2; }
 
 /* Subsurface widget (lives in #subsurfacepanel below the canvas on Map tab). */

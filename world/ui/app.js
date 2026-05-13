@@ -4,6 +4,7 @@
   const buildList = document.getElementById("buildlist");
   const toastEl = document.getElementById("toast");
   const nextDayBtn = document.getElementById("next-day");
+  const prevDayBtn = document.getElementById("prev-day");
   const buildHint = document.getElementById("buildhint");
   const subSurveyBtn = document.getElementById("mode-survey");
   const subDrillBtn = document.getElementById("mode-drill");
@@ -22,6 +23,7 @@
     day: document.getElementById("day"),
     treasury: document.getElementById("treasury"),
     population: document.getElementById("population"),
+    jobs: document.getElementById("jobs"),
     happiness: document.getElementById("happiness"),
     balance: document.getElementById("balance"),
   };
@@ -52,6 +54,17 @@
 
   function isReplay() { return replay.mode === "replay"; }
 
+  // Live-mode "peek backward" (chess-style review). The recorder writes
+  // `runs/<run-id>/states.jsonl` for every live session; `GET
+  // /state/history?day=N` returns the entry for day N. While `peekDay`
+  // is non-null the UI renders the historical snapshot instead of the
+  // live `/state`. Clicking "Next Day" clears the peek and fast-forwards
+  // by stepping the server, which is the documented contract: "the
+  // world jumps to day N+1 fast-forwarding UI".
+  let peekDay = null;
+  let lastLiveDay = 0;
+  function isPeeking() { return peekDay !== null; }
+
   // Refinery process-load is 200 kWh/bbl (slice 09). Per-day kWh for the
   // hover popup = throughput × kWh/bbl. CO2 intensity is 0.3 t/bbl (slice 10).
   const REFINERY_KWH_PER_BBL = 200;
@@ -69,10 +82,12 @@
     wind_turbine: "#6dd5ed",
     coal_plant: "#c97676",
     gas_peaker: "#d09bff",
+    battery: "#7be0a3",
     refinery: "#e07a4d",
   };
 
   const PLANT_TYPES = ["solar_farm", "wind_turbine", "coal_plant", "gas_peaker"];
+  const STORAGE_TYPES = ["battery"];
 
   // Workforce slice 08: staffing badge colours. Bands defined by the PRD:
   // full = 100%, partial = 50–99%, low = 1–49%, idle = 0%. Background +
@@ -319,14 +334,15 @@
   }
 
   // Per-well jobs counts are not in /state — wells only carry staffed_jobs.
-  // Pull the per-type denominator from the full /catalog payload and key it
-  // by the well's runtime type ("production"|"injection").
+  // Pull the per-type denominator from the full /catalog payload, which
+  // puts well specs ("oil_well" / "injection_well") under `.wells`, not
+  // `.tiles`. Falling back to `.tiles` keeps older payload shapes working.
   function wellJobsByType() {
-    if (!catalogRaw || !Array.isArray(catalogRaw.tiles)) {
-      return { production: 0, injection: 0 };
-    }
+    if (!catalogRaw) return { production: 0, injection: 0 };
     const byType = {};
-    for (const entry of catalogRaw.tiles) {
+    const wellEntries = Array.isArray(catalogRaw.wells) ? catalogRaw.wells : [];
+    const tileEntries = Array.isArray(catalogRaw.tiles) ? catalogRaw.tiles : [];
+    for (const entry of [...wellEntries, ...tileEntries]) {
       byType[entry.tile_type] = entry.jobs || 0;
     }
     return {
@@ -588,6 +604,7 @@
       "wind_turbine",
       "gas_peaker",
       "coal_plant",
+      "battery",
     ];
     for (const tt of order) {
       const spec = catalog[tt];
@@ -737,8 +754,26 @@
       const note = t.type === "commercial" ? " peak (8–20h)" : " continuous";
       rows.push(row("Demand", `${fmtNum(t.demand_kw)} kW${note}`, "warn"));
     }
-    // Generators.
-    if (spec && spec.capacity_kw > 0) {
+    // Battery — SoC + manual setpoint. Skip the generator "current output"
+    // row since batteries don't stamp `current_output_kw` per hour.
+    if (t.type === "battery") {
+      const maxKwh = (spec && spec.storage_kwh) || 0;
+      const ratedKw = (spec && spec.capacity_kw) || 0;
+      const eta = (spec && spec.round_trip_efficiency) || 0;
+      const soc = t.soc_kwh || 0;
+      const socPct = maxKwh > 0 ? (100 * soc / maxKwh).toFixed(0) : "—";
+      const sp = t.charge_setpoint_kw || 0;
+      let spLbl = "auto (charge surplus / discharge residual)";
+      let spCls = "";
+      if (sp > 0) { spLbl = `charge ${fmtNum(sp, 1)} kW (manual)`; spCls = "warn"; }
+      else if (sp < 0) { spLbl = `discharge ${fmtNum(-sp, 1)} kW (manual)`; spCls = "warn"; }
+      rows.push(row("Rated power", `${fmtNum(ratedKw)} kW (charge/discharge)`));
+      rows.push(row("Storage", `${fmtNum(maxKwh)} kWh · ${(eta * 100).toFixed(0)}% round-trip`));
+      rows.push(row("State of charge", `${fmtNum(soc, 1)} / ${fmtNum(maxKwh)} kWh (${socPct}%)`, "pos"));
+      rows.push(row("Setpoint", spLbl, spCls));
+    }
+    // Generators (excluding batteries — they have their own block above).
+    if (spec && spec.capacity_kw > 0 && t.type !== "battery") {
       const cap = spec.capacity_kw;
       const out = t.current_output_kw || 0;
       const pct = cap > 0 ? (100 * out / cap).toFixed(0) : "—";
@@ -1109,6 +1144,10 @@
 
   nextDayBtn.addEventListener("click", async () => {
     if (isReplay()) return;
+    // Clear peek FIRST so tick() is not suppressed by the peeking guard.
+    // From the user's seat: peek at day N-3 → click Next Day → world steps
+    // N → N+1 and the UI snaps forward to N+1 (live).
+    clearPeek();
     nextDayBtn.disabled = true;
     try {
       await fetch("/step", {
@@ -1121,6 +1160,8 @@
       nextDayBtn.disabled = false;
     }
   });
+
+  if (prevDayBtn) prevDayBtn.addEventListener("click", () => peekStep(-1));
 
   // Tab switching ---------------------------------------------------------
   const tabButtons = document.querySelectorAll(".tab");
@@ -1164,7 +1205,7 @@
     const padY = 8;
     const allVals = [...pSupply, ...pDemand, ...ySupply, ...yDemand, 1];
     const maxY = Math.max(...allVals) * 1.1;
-    const path = (series, color, dashed) => {
+    const path = (series, color, opts = {}) => {
       if (series.length === 0) return;
       const pts = series.map((v, i) => {
         const x = padX + (i / Math.max(1, series.length - 1)) * (W - padX * 2);
@@ -1174,9 +1215,10 @@
       const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
       p.setAttribute("d", pts.join(" "));
       p.setAttribute("stroke", color);
-      p.setAttribute("stroke-width", "2");
+      p.setAttribute("stroke-width", String(opts.width || 2));
       p.setAttribute("fill", "none");
-      if (dashed) p.setAttribute("stroke-dasharray", "4 3");
+      if (opts.opacity != null) p.setAttribute("stroke-opacity", String(opts.opacity));
+      if (opts.dashed) p.setAttribute("stroke-dasharray", "4 3");
       chartEl.appendChild(p);
     };
     // Y-axis label (max).
@@ -1187,11 +1229,14 @@
     lbl.setAttribute("font-size", "10");
     lbl.textContent = `${Math.round(maxY)} kW`;
     chartEl.appendChild(lbl);
-    // Yesterday underneath (dashed, dimmer); projection on top (solid).
-    path(yDemand, "#ff7a59", true);
-    path(ySupply, "#4ea3ff", true);
-    path(pDemand, "#ff7a59", false);
-    path(pSupply, "#4ea3ff", false);
+    // Layering order: yesterday (dashed, dimmer) underneath, projection on top.
+    // Within each pair: supply is a wider, semi-transparent envelope and
+    // demand is a crisp solid line on top, so demand stays visible even when
+    // it equals supply (a `balanced` grid produces identical series).
+    path(ySupply, "#4ea3ff", { dashed: true, width: 4, opacity: 0.35 });
+    path(yDemand, "#ff7a59", { dashed: true, width: 2, opacity: 0.7 });
+    path(pSupply, "#4ea3ff", { width: 4, opacity: 0.45 });
+    path(pDemand, "#ff7a59", { width: 2 });
   }
 
   function renderPowerMargin(preview) {
@@ -1220,7 +1265,8 @@
     if (!plantListEl) return;
     plantListEl.innerHTML = "";
     const plants = allTiles.filter((t) => PLANT_TYPES.includes(t.type));
-    if (plants.length === 0) {
+    const batteries = allTiles.filter((t) => STORAGE_TYPES.includes(t.type));
+    if (plants.length === 0 && batteries.length === 0) {
       const li = document.createElement("li");
       li.style.color = "#5a5d65";
       li.style.fontSize = "0.8rem";
@@ -1229,6 +1275,7 @@
       return;
     }
     const caps = (catalog && Object.fromEntries(Object.entries(catalog).map(([k, v]) => [k, v.capacity_kw || 1]))) || {};
+    const storageMax = (catalog && Object.fromEntries(Object.entries(catalog).map(([k, v]) => [k, v.storage_kwh || 0]))) || {};
     for (const p of plants) {
       const cap = caps[p.type] || 1;
       const out = p.current_output_kw || 0;
@@ -1239,6 +1286,26 @@
         <span class="pl-name">${p.type} (${p.x},${p.y})</span>
         <div class="pl-bar"><div class="pl-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
         <span class="pl-val">${Math.round(out)}/${cap} kW</span>
+      `;
+      plantListEl.appendChild(li);
+    }
+    // Batteries: show SoC as a fill bar (kWh stored / max kWh) and the manual
+    // charge setpoint when set. current_output_kw isn't stamped per-hour on
+    // batteries so we deliberately don't show a kW rate here.
+    for (const b of batteries) {
+      const maxKwh = storageMax[b.type] || 1;
+      const soc = b.soc_kwh || 0;
+      const pct = Math.min(100, (soc / maxKwh) * 100);
+      const sp = b.charge_setpoint_kw || 0;
+      let spLbl = "auto";
+      if (sp > 0) spLbl = `charge ${Math.round(sp)} kW`;
+      else if (sp < 0) spLbl = `discharge ${Math.round(-sp)} kW`;
+      const li = document.createElement("li");
+      li.className = `plantrow battery`;
+      li.innerHTML = `
+        <span class="pl-name">battery (${b.x},${b.y}) · ${spLbl}</span>
+        <div class="pl-bar"><div class="pl-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
+        <span class="pl-val">${Math.round(soc)}/${maxKwh} kWh</span>
       `;
       plantListEl.appendChild(li);
     }
@@ -1757,6 +1824,9 @@
     cols = s.config.world_w;
     rows = s.config.world_h;
     worldDims = { w: s.config.world_w, h: s.config.world_h, d: s.config.world_d };
+    if (Number.isFinite(s.config.ui_play_ms)) playCadenceMs = s.config.ui_play_ms;
+    if (Number.isFinite(s.config.ui_fast_play_ms)) fastCadenceMs = s.config.ui_fast_play_ms;
+    updateTimerButtons();
     if (subSliceEl && !subSliceEl.dataset.bounded) {
       subSliceEl.max = String(Math.max(0, worldDims.w - 1));
       subSliceEl.dataset.bounded = "1";
@@ -1772,7 +1842,17 @@
     treasury = s.treasury;
     els.day.textContent = s.day;
     els.treasury.textContent = Math.round(s.treasury).toLocaleString();
-    els.population.textContent = `${s.unemployed}/${s.population}`;
+    // Population: pop / housing capacity, with unemployed as a prefix so the
+    // jobs headroom story (the throttle on growth) reads at a glance.
+    const housingCap = s.housing_capacity ?? 0;
+    els.population.textContent = `${s.unemployed} idle · ${s.population}/${housingCap}`;
+    // Jobs: staffed/total with the open headroom inline. Empty headroom is
+    // the immediate-cause for stalled population growth.
+    const jobsTotal = s.jobs_total ?? 0;
+    const jobsVacant = s.jobs_vacant ?? 0;
+    if (els.jobs) {
+      els.jobs.textContent = `${s.employed}/${jobsTotal} (${jobsVacant} open)`;
+    }
     els.happiness.textContent = s.happiness.toFixed(2);
     const balanceState = (s.power_now && s.power_now.balance_state) || "—";
     els.balance.textContent = balanceState;
@@ -1819,14 +1899,67 @@
 
   async function tick() {
     if (isReplay()) return;
+    if (isPeeking()) return;  // peek mode renders a historical snapshot; live polls are suppressed
     try {
       const res = await fetch("/state");
       if (!res.ok) return;
       const s = await res.json();
+      lastLiveDay = Number.isFinite(s.day) ? s.day : lastLiveDay;
       applyStateSnapshot(s);
+      updatePeekButtons();
     } catch (err) {
       // Server may not be up yet during boot; the next user action will retry.
     }
+  }
+
+  function updatePeekButtons() {
+    if (!prevDayBtn) return;
+    // In replay mode, the replay bar has its own back button; hide this one.
+    prevDayBtn.disabled = isReplay() || (isPeeking() ? peekDay <= 0 : lastLiveDay <= 0);
+    prevDayBtn.textContent = isPeeking() ? `◀ Prev Day (peeking ${peekDay})` : "◀ Prev Day";
+  }
+
+  async function peekStep(delta) {
+    if (isReplay()) return;
+    const base = isPeeking() ? peekDay : lastLiveDay;
+    const target = base + delta;
+    if (target < 0) {
+      showToast("no recorded day before day 0", "info");
+      return;
+    }
+    try {
+      const res = await fetch(`/state/history?day=${target}`);
+      if (!res.ok) {
+        let detail = "";
+        try {
+          const body = await res.json();
+          detail = body.detail || "";
+        } catch (err) {
+          // ignore
+        }
+        showToast(`peek failed: ${detail || res.status}`, "error");
+        return;
+      }
+      const entry = await res.json();
+      const state = entry && entry.state;
+      if (!state) return;
+      // Pause the play timer if it was running — peeking and auto-advance
+      // are mutually exclusive.
+      pauseTimer();
+      peekDay = target;
+      document.body.classList.add("peeking");
+      applyStateSnapshot(state, { fromReplay: true });
+      updatePeekButtons();
+    } catch (err) {
+      showToast(`peek failed: ${err}`, "error");
+    }
+  }
+
+  function clearPeek() {
+    if (!isPeeking()) return;
+    peekDay = null;
+    document.body.classList.remove("peeking");
+    updatePeekButtons();
   }
 
   function renderReplayFrame(index) {
@@ -1880,6 +2013,8 @@
       document.body.classList.add("replay-mode");
       // Cancel any active build/survey/drill interaction mode.
       if (mode) setMode(null);
+      // Replay mode owns its own back button; clear any live-mode peek.
+      clearPeek();
     } else {
       document.body.classList.remove("replay-mode");
     }
@@ -1888,6 +2023,7 @@
     // vice versa).
     if (changed && typeof pauseTimer === "function") pauseTimer();
     updateReplayUi();
+    updatePeekButtons();
     if (typeof refreshScenarioReadout === "function") refreshScenarioReadout();
   }
 
@@ -1972,21 +2108,48 @@
     });
   }
 
-  // Play / fast-play / pause (issue 10). A single `playTimer` setInterval
+  // Play / fast / pause (issue 10). A single `playTimer` setInterval
   // handle plus `playSpeed` (500 | 250 | null) describes the auto-advance
   // state. The timer dispatches to `/step` (live) or `renderReplayFrame`
   // (replay) based on `replay.mode`. `stepInFlight` guards live mode
   // against overlapping `/step` requests on slow hardware.
+  //
+  // Each speed has ONE button that toggles between starting that speed
+  // and pausing (#play-btn for 500 ms, #fast-btn for 250 ms). The button
+  // label/icon flips: ▶ Play / ⏩ Fast when that speed is idle, ⏸ Pause
+  // when that speed is currently running. Clicking either button while
+  // the OTHER speed is running switches speeds (cancels the running
+  // interval and starts at the clicked button's cadence).
   let playTimer = null;
   let playSpeed = null;
   let stepInFlight = false;
+  // Cadences come from `/state.config.{ui_play_ms, ui_fast_play_ms}` so
+  // they can be tuned via env vars (UI_PLAY_MS, UI_FAST_PLAY_MS) without
+  // editing this file. Defaults match the in-flight values used before
+  // `tick()` populates them — clicking Play in the brief window between
+  // page load and the first `/state` response uses these.
+  let playCadenceMs = 500;
+  let fastCadenceMs = 250;
   const playBtn = document.getElementById("play-btn");
   const fastBtn = document.getElementById("fast-btn");
-  const pauseBtn = document.getElementById("pause-btn");
 
   function updateTimerButtons() {
-    if (playBtn) playBtn.classList.toggle("active", playSpeed === 500);
-    if (fastBtn) fastBtn.classList.toggle("active", playSpeed === 250);
+    if (playBtn) {
+      const running = playSpeed === playCadenceMs;
+      playBtn.classList.toggle("active", running);
+      playBtn.textContent = running ? "⏸ Pause" : "▶ Play";
+      playBtn.title = running
+        ? "Pause (Space)"
+        : `Play (Space) — auto-advance at ${playCadenceMs} ms/day`;
+    }
+    if (fastBtn) {
+      const running = playSpeed === fastCadenceMs;
+      fastBtn.classList.toggle("active", running);
+      fastBtn.textContent = running ? "⏸ Pause" : "⏩ Fast";
+      fastBtn.title = running
+        ? "Pause (Shift+Space)"
+        : `Fast (Shift+Space) — auto-advance at ${fastCadenceMs} ms/day`;
+    }
   }
 
   function pauseTimer() {
@@ -2045,6 +2208,9 @@
   function startTimer(ms) {
     if (playSpeed === ms && playTimer !== null) return;  // no-op: same speed already running
     pauseTimer();
+    // Auto-advance is a live-mode action; pressing Play while peeking
+    // snaps the UI back to live before the first interval fires.
+    clearPeek();
     playSpeed = ms;
     playTimer = setInterval(() => {
       if (isReplay()) timerTickReplay();
@@ -2053,9 +2219,13 @@
     updateTimerButtons();
   }
 
-  if (playBtn) playBtn.addEventListener("click", () => startTimer(500));
-  if (fastBtn) fastBtn.addEventListener("click", () => startTimer(250));
-  if (pauseBtn) pauseBtn.addEventListener("click", () => pauseTimer());
+  function toggleTimer(ms) {
+    if (playSpeed === ms) pauseTimer();
+    else startTimer(ms);
+  }
+
+  if (playBtn) playBtn.addEventListener("click", () => toggleTimer(playCadenceMs));
+  if (fastBtn) fastBtn.addEventListener("click", () => toggleTimer(fastCadenceMs));
 
   window.addEventListener("beforeunload", () => pauseTimer());
 
@@ -2172,7 +2342,7 @@
     // on `replay.mode` per tick).
     if (ev.key === " " || ev.code === "Space") {
       ev.preventDefault();
-      const targetSpeed = ev.shiftKey ? 250 : 500;
+      const targetSpeed = ev.shiftKey ? fastCadenceMs : playCadenceMs;
       if (playSpeed === targetSpeed) pauseTimer();
       else startTimer(targetSpeed);
     }
@@ -2190,4 +2360,5 @@
   drawGrid();
   tick();
   refreshScenarioReadout();
+  updatePeekButtons();
 })();

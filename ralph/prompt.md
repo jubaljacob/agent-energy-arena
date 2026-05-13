@@ -1,12 +1,16 @@
 # ISSUES
 
-Local issue files from `issues/` are provided at start of context. Parse them to understand the open issues.
+Local issue files from `.scratch/<feature>/issues/*.md` are provided at start of context. Parse them to understand the open issues. See `docs/agents/issue-tracker.md` for the conventions.
 
-You will work on the AFK issues only, not the HITL ones.
+You will work on the AFK issues only, not the HITL ones. Classify each open issue this way:
 
-You've also been passed a file containing the last few commits. Review these to understand what work has been done.
+- **AFK-eligible** if the issue file's header carries `Status: ready-for-agent` AND either has no `Verification:` line or has `Verification: AFK ...` (e.g. `AFK code + HITL play test`). In the latter case, your job is the code change plus filling in the issue's documented manual-verification protocol into the commit message / PR description for a later human reviewer — you do NOT need to run the protocol yourself.
+- **HITL-only** if the issue file carries `Status: ready-for-human`, or carries `Verification: HITL` with no `AFK ...` qualifier. Skip these.
+- If the status is anything else (`needs-triage`, `needs-info`, `wontfix`), skip.
 
-If all AFK tasks are complete, output <promise>NO MORE TASKS</promise>.
+You've also been passed a file containing the last few commits. Review these to understand what work has been done. Do NOT use commit-message classifications of past work as authoritative for the current issue's eligibility — read the issue file itself.
+
+If all AFK-eligible tasks are complete, output <promise>NO MORE TASKS</promise>.
 
 # TASK SELECTION
 
@@ -38,10 +42,11 @@ Use /tdd to complete the task.
 
 # FEEDBACK LOOPS
 
-Before committing, run the feedback loops:
+This is a Python project. There is no `npm`. Before committing, run the canonical pre-commit gate:
 
-- `npm run test` to run the tests
-- `npm run typecheck` to run the type checker
+- `make check` (runs lint + format-check + typecheck + test, in that order)
+
+Fix the underlying issue rather than skipping a gate. See `CLAUDE.md`.
 
 # COMMIT
 
@@ -53,7 +58,7 @@ Make a git commit. The commit message must:
 
 # THE ISSUE
 
-If the task is complete, move the issue file to `issues/done/`.
+If the task is complete, move the issue file to its sibling `done/` directory (e.g. `.scratch/<feature>/issues/done/`).
 
 If the task is not complete, add a note to the issue file with what was done.
 

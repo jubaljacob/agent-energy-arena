@@ -140,3 +140,46 @@ def test_world_step_failure_logged(tmp_path: Path) -> None:
 
     entries = [json.loads(line) for line in log.path.read_text().splitlines()]
     assert any(e["endpoint"] == "/step" and e["ok"] is False for e in entries)
+
+
+def test_state_history_returns_recorded_day(tmp_path: Path) -> None:
+    """`GET /state/history?day=N` returns the recorder entry for that day.
+
+    The UI's "previous day" peek in live mode reads from this endpoint to
+    render past days without moving the server's simulation state.
+    """
+    log = ActionLog(root=tmp_path / "runs")
+    world = World(runs_root=str(tmp_path / "runs"))
+    app = create_app(world=world, action_log=log)
+    client = TestClient(app)
+
+    client.post("/reset", json={"seed": 42})
+    # Step a few days so the recorder has multiple entries to choose from.
+    client.post("/step", json={"days": 3})
+
+    # Recorder writes day N before incrementing state.day to N+1, so after
+    # three steps the entries are for days 0, 1, 2. The embedded
+    # state_dict() also shows the just-completed day (pre-increment).
+    for d in (0, 1, 2):
+        r = client.get("/state/history", params={"day": d})
+        assert r.status_code == 200, r.text
+        entry = r.json()
+        assert entry["day"] == d
+        assert "state" in entry and "summary" in entry
+        assert entry["state"]["day"] == d
+
+    # Day 99 was never recorded.
+    r = client.get("/state/history", params={"day": 99})
+    assert r.status_code == 404
+
+
+def test_state_history_404s_without_recorder(tmp_path: Path) -> None:
+    """When the world has no recorder (tests, embedded use), /state/history
+    returns 404 with a clear detail string rather than raising 500."""
+    log = ActionLog(root=tmp_path / "runs")
+    world = World()  # no runs_root → recorder is None
+    app = create_app(world=world, action_log=log)
+    client = TestClient(app)
+    r = client.get("/state/history", params={"day": 0})
+    assert r.status_code == 404
+    assert "no recorded history" in r.json()["detail"]

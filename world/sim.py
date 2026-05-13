@@ -85,6 +85,7 @@ from world.weather import (
 )
 from world.workforce import employed as workforce_employed
 from world.workforce import hire_to_fill
+from world.workforce import total_jobs as workforce_total_jobs
 from world.workforce import unemployed as workforce_unemployed
 
 
@@ -1142,6 +1143,9 @@ class World:
             "population": int(s.population),
             "employed": workforce_employed(s),
             "unemployed": workforce_unemployed(s),
+            "housing_capacity": sum(t.housing_capacity for t in s.tiles),
+            "jobs_total": workforce_total_jobs(s),
+            "jobs_vacant": max(0, workforce_total_jobs(s) - workforce_employed(s)),
             "happiness": s.happiness,
             "config": {
                 "world_w": c.world_w,
@@ -1157,6 +1161,8 @@ class World:
                 "active_game_days": (
                     c.manual_game_days if self.session == "manual" else c.game_days
                 ),
+                "ui_play_ms": c.ui_play_ms,
+                "ui_fast_play_ms": c.ui_fast_play_ms,
             },
             "tiles": [_tile_to_dict(t, self) for t in s.tiles],
             "wells": [_well_to_dict(w, self) for w in s.wells],

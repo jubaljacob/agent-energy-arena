@@ -137,6 +137,27 @@ def create_app(
     def get_state() -> dict[str, Any]:
         return app.state.world.state_dict()
 
+    @app.get("/state/history")
+    def get_state_history(day: int) -> dict[str, Any]:
+        # Reads one entry from the in-progress run's `states.jsonl`. Lets
+        # the UI render a previous live day (read-only "peek backward")
+        # without server simulation state moving. The recorder writes one
+        # line per just-completed day with `day` reflecting `state.day`
+        # before its post-step increment — so live `state.day == N` means
+        # the most recent recorded entry has `day == N - 1`.
+        recorder = app.state.world.recorder
+        if recorder is None or not recorder.states_path.exists():
+            raise HTTPException(status_code=404, detail="no recorded history")
+        with recorder.states_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                entry = json.loads(stripped)
+                if entry.get("day") == day:
+                    return entry
+        raise HTTPException(status_code=404, detail=f"day {day} not in recorded history")
+
     @app.get("/scenario")
     def get_scenario() -> dict[str, Any]:
         world = app.state.world

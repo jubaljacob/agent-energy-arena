@@ -47,6 +47,9 @@ Returns the full world snapshot.
   "population": 1230,
   "employed": 980,
   "unemployed": 250,
+  "housing_capacity": 1480,
+  "jobs_total": 1100,
+  "jobs_vacant": 120,
   "happiness": 0.85,
   "config": {
     "world_w": 32, "world_h": 32, "world_d": 16,

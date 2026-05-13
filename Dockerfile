@@ -4,7 +4,7 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=0
 
 # Runtime deps for both `world` and `agent` services.  httpx powers the
 # agent's live-HTTP transport; the rest are world deps.

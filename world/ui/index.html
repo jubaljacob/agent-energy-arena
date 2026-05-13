@@ -9,12 +9,13 @@
   <header id="topbar">
     <div class="metric"><span class="label">Day</span><span id="day">—</span></div>
     <div class="metric"><span class="label">Treasury</span>$<span id="treasury">—</span></div>
-    <div class="metric"><span class="label">Population</span><span id="population">—</span></div>
+    <div class="metric" title="unemployed / population (used) / housing capacity"><span class="label">Population</span><span id="population">—</span></div>
+    <div class="metric" title="staffed / total jobs across all tiles"><span class="label">Jobs</span><span id="jobs">—</span></div>
     <div class="metric"><span class="label">Happiness</span><span id="happiness">—</span></div>
     <div class="metric"><span class="label">Balance</span><span id="balance" class="balance-badge">—</span></div>
-    <button id="play-btn" title="Play (Space) — auto-advance at 500 ms/day">▶ Play</button>
-    <button id="fast-btn" title="Fast-play (Shift+Space) — auto-advance at 250 ms/day">⏩ Fast</button>
-    <button id="pause-btn" title="Pause">⏸ Pause</button>
+    <button id="play-btn" title="Play / Pause (Space) — auto-advance at 500 ms/day">▶ Play</button>
+    <button id="fast-btn" title="Fast / Pause (Shift+Space) — auto-advance at 250 ms/day">⏩ Fast</button>
+    <button id="prev-day" title="Peek previous recorded day — read-only; Next Day snaps back to live">◀ Prev Day</button>
     <button id="next-day">Next Day</button>
     <button id="load-run" title="Load a recorded run folder (metadata.json + states.jsonl)">Load run</button>
     <input id="replay-files" type="file" webkitdirectory directory multiple hidden />

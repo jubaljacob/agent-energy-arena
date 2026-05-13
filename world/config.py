@@ -41,6 +41,8 @@ class Config:
     api_port: int
     llm_base_url: str
     llm_model: str
+    ui_play_ms: int
+    ui_fast_play_ms: int
 
 
 def load_config() -> Config:
@@ -63,4 +65,6 @@ def load_config() -> Config:
         api_port=_int("API_PORT", 8000),
         llm_base_url=_str("LLM_BASE_URL", "https://api.openai.com/v1"),
         llm_model=_str("LLM_MODEL", "gpt-4o-mini"),
+        ui_play_ms=_int("UI_PLAY_MS", 1000),
+        ui_fast_play_ms=_int("UI_FAST_PLAY_MS", 500),
     )

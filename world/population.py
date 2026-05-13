@@ -81,7 +81,7 @@ def update_population(world: World) -> None:
     config = world.config
 
     capacity = sum(t.housing_capacity for t in state.tiles)
-    jobs = sum(t.jobs for t in state.tiles)
+    jobs = workforce.total_jobs(state)
     parks = [t for t in state.tiles if t.type == "park"]
     houses = [t for t in state.tiles if t.type == "house"]
     house_count = len(houses)
