@@ -12,6 +12,9 @@
     <div class="metric"><span class="label">Population</span><span id="population">—</span></div>
     <div class="metric"><span class="label">Happiness</span><span id="happiness">—</span></div>
     <div class="metric"><span class="label">Balance</span><span id="balance" class="balance-badge">—</span></div>
+    <button id="play-btn" title="Play (Space) — auto-advance at 500 ms/day">▶ Play</button>
+    <button id="fast-btn" title="Fast-play (Shift+Space) — auto-advance at 250 ms/day">⏩ Fast</button>
+    <button id="pause-btn" title="Pause">⏸ Pause</button>
     <button id="next-day">Next Day</button>
     <button id="load-run" title="Load a recorded run folder (metadata.json + states.jsonl)">Load run</button>
     <input id="replay-files" type="file" webkitdirectory directory multiple hidden />
@@ -162,6 +165,24 @@
     </section>
     <section id="tab-events" class="tabpanel">
       <div id="eventswrap">
+        <div id="scenario-panel" class="scenario-panel">
+          <h2>Scenario</h2>
+          <div class="scenario-readout">
+            <span class="scenario-readout-label">Attached:</span>
+            <span id="scenario-current" class="scenario-current">(none)</span>
+          </div>
+          <div class="scenario-controls">
+            <input id="scenario-input" type="text" placeholder="dotted path (e.g. scenarios.grid_stress.GridStress)" />
+            <button id="scenario-attach">Attach</button>
+            <button id="scenario-detach">Detach</button>
+          </div>
+          <p class="scenario-hint">
+            Calls <code>POST /scenario</code> with the dotted path. Detach
+            re-attaches <code>scenarios.baseline</code> (a NullScenario
+            subclass, so the readout flips to <code>(none)</code>).
+            Disabled in replay mode.
+          </p>
+        </div>
         <h2>Active events</h2>
         <table id="eventstable">
           <thead>

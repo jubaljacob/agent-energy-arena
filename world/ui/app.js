@@ -1874,6 +1874,7 @@
   }
 
   function setReplayMode(next) {
+    const changed = replay.mode !== next;
     replay.mode = next;
     if (next === "replay") {
       document.body.classList.add("replay-mode");
@@ -1882,7 +1883,12 @@
     } else {
       document.body.classList.remove("replay-mode");
     }
+    // Pause the auto-advance timer on any mode switch so cadence and
+    // dispatch target don't desync (live timer firing into replay or
+    // vice versa).
+    if (changed && typeof pauseTimer === "function") pauseTimer();
     updateReplayUi();
+    if (typeof refreshScenarioReadout === "function") refreshScenarioReadout();
   }
 
   function closeReplay() {
@@ -1965,6 +1971,177 @@
       ev.target.value = "";
     });
   }
+
+  // Play / fast-play / pause (issue 10). A single `playTimer` setInterval
+  // handle plus `playSpeed` (500 | 250 | null) describes the auto-advance
+  // state. The timer dispatches to `/step` (live) or `renderReplayFrame`
+  // (replay) based on `replay.mode`. `stepInFlight` guards live mode
+  // against overlapping `/step` requests on slow hardware.
+  let playTimer = null;
+  let playSpeed = null;
+  let stepInFlight = false;
+  const playBtn = document.getElementById("play-btn");
+  const fastBtn = document.getElementById("fast-btn");
+  const pauseBtn = document.getElementById("pause-btn");
+
+  function updateTimerButtons() {
+    if (playBtn) playBtn.classList.toggle("active", playSpeed === 500);
+    if (fastBtn) fastBtn.classList.toggle("active", playSpeed === 250);
+  }
+
+  function pauseTimer() {
+    if (playTimer !== null) {
+      clearInterval(playTimer);
+      playTimer = null;
+    }
+    playSpeed = null;
+    updateTimerButtons();
+  }
+
+  async function timerTickLive() {
+    if (stepInFlight) return;
+    stepInFlight = true;
+    try {
+      const res = await fetch("/step", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ days: 1 }),
+      });
+      if (!res.ok) {
+        pauseTimer();
+        let detail = "";
+        try {
+          const body = await res.json();
+          detail = body.detail || "";
+        } catch (err) {
+          // ignore
+        }
+        showToast(`step rejected: ${detail || res.status}`, "error");
+        return;
+      }
+      await tick();
+    } catch (err) {
+      pauseTimer();
+      showToast(`network error: ${err}`, "error");
+    } finally {
+      stepInFlight = false;
+    }
+  }
+
+  function timerTickReplay() {
+    if (!replay.states.length) {
+      pauseTimer();
+      return;
+    }
+    const next = replay.cursor + 1;
+    if (next >= replay.states.length) {
+      renderReplayFrame(replay.states.length - 1);
+      pauseTimer();
+      return;
+    }
+    renderReplayFrame(next);
+  }
+
+  function startTimer(ms) {
+    if (playSpeed === ms && playTimer !== null) return;  // no-op: same speed already running
+    pauseTimer();
+    playSpeed = ms;
+    playTimer = setInterval(() => {
+      if (isReplay()) timerTickReplay();
+      else timerTickLive();
+    }, ms);
+    updateTimerButtons();
+  }
+
+  if (playBtn) playBtn.addEventListener("click", () => startTimer(500));
+  if (fastBtn) fastBtn.addEventListener("click", () => startTimer(250));
+  if (pauseBtn) pauseBtn.addEventListener("click", () => pauseTimer());
+
+  window.addEventListener("beforeunload", () => pauseTimer());
+
+  // Scenario attach control (issue 10). Calls GET /scenario to populate
+  // the readout on app boot, after every successful POST /scenario, and
+  // when entering live mode from replay. POST /scenario carries the
+  // dotted path in `{dotted_path: <value>}`. "Detach" re-attaches
+  // `scenarios.baseline` — a NullScenario subclass, so the GET response
+  // flips back to `{dotted_path: null}` and the readout shows `(none)`.
+  // The loader explicitly excludes NullScenario itself, so we cannot
+  // post `world.scenario.NullScenario` directly.
+  const scenarioInputEl = document.getElementById("scenario-input");
+  const scenarioCurrentEl = document.getElementById("scenario-current");
+  const scenarioAttachBtn = document.getElementById("scenario-attach");
+  const scenarioDetachBtn = document.getElementById("scenario-detach");
+  const DETACH_DOTTED_PATH = "scenarios.baseline";
+
+  async function refreshScenarioReadout() {
+    if (!scenarioCurrentEl) return;
+    if (isReplay()) {
+      const md = replay.metadata || {};
+      const scenario = md.scenario == null ? "(none)" : md.scenario;
+      scenarioCurrentEl.textContent = scenario;
+      return;
+    }
+    try {
+      const res = await fetch("/scenario");
+      if (!res.ok) return;
+      const body = await res.json();
+      const path = body.dotted_path;
+      scenarioCurrentEl.textContent = path == null ? "(none)" : path;
+    } catch (err) {
+      // ignore — boot race
+    }
+  }
+
+  async function attachScenario(path) {
+    try {
+      const res = await fetch("/scenario", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ dotted_path: path }),
+      });
+      if (!res.ok) {
+        let detail = String(res.status);
+        try {
+          const body = await res.json();
+          detail = body.detail || detail;
+        } catch (err) {
+          // ignore
+        }
+        showToast(`scenario rejected: ${detail}`, "error");
+        return false;
+      }
+      await refreshScenarioReadout();
+      tick();
+      return true;
+    } catch (err) {
+      showToast(`network error: ${err}`, "error");
+      return false;
+    }
+  }
+
+  if (scenarioAttachBtn && scenarioInputEl) {
+    scenarioAttachBtn.addEventListener("click", async () => {
+      if (isReplay()) return;
+      const val = (scenarioInputEl.value || "").trim();
+      if (!val) {
+        showToast("enter a dotted path first", "error");
+        return;
+      }
+      const ok = await attachScenario(val);
+      if (ok) {
+        showToast(`attached ${val}`, "ok");
+        scenarioInputEl.value = "";
+      }
+    });
+  }
+  if (scenarioDetachBtn) {
+    scenarioDetachBtn.addEventListener("click", async () => {
+      if (isReplay()) return;
+      const ok = await attachScenario(DETACH_DOTTED_PATH);
+      if (ok) showToast("scenario detached", "ok");
+    });
+  }
+
   if (replaySliderEl) {
     replaySliderEl.addEventListener("input", () => {
       const idx = parseInt(replaySliderEl.value, 10);
@@ -1976,25 +2153,41 @@
   if (replayCloseBtn) replayCloseBtn.addEventListener("click", () => closeReplay());
 
   window.addEventListener("keydown", (ev) => {
-    if (!isReplay()) return;
     const tag = (ev.target && ev.target.tagName) || "";
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    if (ev.key === "ArrowLeft") {
+    if (isReplay()) {
+      if (ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        replayStepBy(-1);
+        return;
+      }
+      if (ev.key === "ArrowRight") {
+        ev.preventDefault();
+        replayStepBy(1);
+        return;
+      }
+    }
+    // Space toggles Play / Pause; Shift+Space toggles Fast / Pause.
+    // Works in both live and replay mode (the timer dispatcher branches
+    // on `replay.mode` per tick).
+    if (ev.key === " " || ev.code === "Space") {
       ev.preventDefault();
-      replayStepBy(-1);
-    } else if (ev.key === "ArrowRight") {
-      ev.preventDefault();
-      replayStepBy(1);
+      const targetSpeed = ev.shiftKey ? 250 : 500;
+      if (playSpeed === targetSpeed) pauseTimer();
+      else startTimer(targetSpeed);
     }
   });
 
   let _lastRevealedCount = -1;
   let _lastWellsCount = -1;
 
-  // No periodic `setInterval(tick)` — every mutating action (build,
-  // demolish, survey, drill, control, step) calls `tick()` itself, so the
-  // UI stays current without polling /state continuously.
+  // No periodic `setInterval(tick)` for /state — every mutating action
+  // (build, demolish, survey, drill, control, step) calls `tick()`
+  // itself, so the UI stays current without polling continuously. The
+  // play/fast/pause timer (issue 10) is opt-in and dispatches to /step
+  // (live) or `renderReplayFrame` (replay) on a setInterval.
   loadCatalog();
   drawGrid();
   tick();
+  refreshScenarioReadout();
 })();
