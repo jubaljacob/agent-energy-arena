@@ -127,3 +127,69 @@ def test_evaluate_requires_agent_or_replay(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit):
         evaluate.main([])
+
+
+def test_evaluate_cli_with_scenario_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`--scenario scenarios.grid_stress` attaches the scenario for the run.
+
+    The scenario dotted path lands in `metadata.json` for the post-reset
+    recorder; `--replay` reads the field and re-attaches before driving
+    the action log so the replay matches the recorded final state.
+    """
+    _short_game(monkeypatch, days=30)
+    monkeypatch.chdir(tmp_path)
+
+    rc = evaluate.main(
+        [
+            "--agent",
+            "submit.agent",
+            "--seed",
+            "42",
+            "--scenario",
+            "scenarios.grid_stress",
+        ]
+    )
+    assert rc == 0
+
+    line = capsys.readouterr().out.strip().splitlines()[-1]
+    payload = json.loads(line)
+    run_dir = tmp_path / "runs" / payload["run_id"]
+    metadata = json.loads((run_dir / "metadata.json").read_text())
+    assert metadata["scenario"] == "scenarios.grid_stress"
+
+    # The grid-stress scenario fires a heatwave on day 10 with a 5-day
+    # duration (see scenarios/grid_stress.py). Over a 30-day run that
+    # event ends and lands in `historical_events`, so its presence in
+    # the recorded final state is observable proof that the day-loop
+    # hook actually ran the scenario.
+    final = json.loads((run_dir / "final_state.json").read_text())
+    historical = final.get("historical_events", [])
+    assert any(ev.get("type") == "heatwave" and ev.get("started_day") == 10 for ev in historical)
+
+    assert evaluate.cmd_replay(run_dir) == 0
+
+
+def test_evaluate_cli_without_scenario_records_null(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Omitting `--scenario` leaves the metadata scenario field null.
+
+    The default `NullScenario` is observably a no-op (slice 02), so the
+    behavior matches a bare run.
+    """
+    _short_game(monkeypatch, days=30)
+    monkeypatch.chdir(tmp_path)
+
+    rc = evaluate.main(["--agent", "submit.agent", "--seed", "42"])
+    assert rc == 0
+
+    line = capsys.readouterr().out.strip().splitlines()[-1]
+    run_dir = tmp_path / "runs" / json.loads(line)["run_id"]
+    metadata = json.loads((run_dir / "metadata.json").read_text())
+    assert metadata["scenario"] is None

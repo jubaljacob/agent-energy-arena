@@ -9,10 +9,17 @@ Two modes per the brief §11.2 / issue 18:
         the action log at runs/{run_id}/final_state.json, and prints a
         JSON breakdown line.  Exit 0 on success, 1 on agent crash.
 
+        Pass ``--scenario <dotted_path>`` (e.g. ``scenarios.grid_stress``)
+        to attach a stress scenario before the agent runs. The scenario
+        dotted path is captured in the run's ``metadata.json`` so
+        ``--replay`` can re-attach without re-passing the flag.
+
     python evaluate.py --replay runs/{run_id}
         Re-runs the action log byte-for-byte against a fresh in-process
         world, then asserts json.dumps(state) equals the recorded
-        final_state.json.  Exit 0 on match, 1 on drift.
+        final_state.json.  Exit 0 on match, 1 on drift. If the run's
+        ``metadata.json`` carries a ``scenario`` field, the scenario is
+        attached to the fresh world before the action log replays.
 
 By default the agent runs against an in-process FastAPI TestClient — no
 uvicorn boot, no port management — matching the pattern in
@@ -37,6 +44,7 @@ from agents.api_client import ApiClient
 from agents.base import BaseAgent
 from world.action_log import ActionLog
 from world.api import BASELINES_DIR, create_app
+from world.scenario import load_scenario
 from world.sim import World
 
 
@@ -148,7 +156,7 @@ def _dispatch(api: ApiClient, endpoint: str, params: dict[str, Any]) -> Any:
 # --- Commands ---------------------------------------------------------------
 
 
-def cmd_eval(module_name: str, seed: int, api_url: str | None) -> int:
+def cmd_eval(module_name: str, seed: int, api_url: str | None, scenario: str | None = None) -> int:
     AgentCls = _load_agent_class(module_name)
     world: World | None = None
     if api_url:
@@ -165,6 +173,13 @@ def cmd_eval(module_name: str, seed: int, api_url: str | None) -> int:
         # reflects the post-reset folder rather than the stale
         # construction-time one.
         run_dir = _log.dir  # tentative; reassigned below after play_game
+
+    # Attach the scenario BEFORE the agent's first reset so the scenario
+    # survives into the post-reset recorder's metadata.json (the agent
+    # always calls /reset without a scenario arg, and slice-04 reset
+    # preserves the currently-attached scenario when none is passed).
+    if scenario is not None:
+        api.attach_scenario(scenario)
 
     agent = AgentCls(api, seed=seed)
     final_state = agent.play_game()
@@ -203,6 +218,19 @@ def cmd_replay(run_dir: Path) -> int:
     replay_root = run_dir.parent / f"_replay-{run_dir.name}"
     api, _world, _log = _make_inprocess_client(runs_root=replay_root)
 
+    # If the original run had a scenario attached at reset time, the
+    # recorder captured the dotted path in metadata.json. Re-attach it
+    # to the fresh world before replaying the action log so the day-
+    # loop hook fires identically. Re-issuing any /scenario or /reset
+    # entries from the log later in the loop is then a deterministic
+    # no-op on top of the same attached state.
+    metadata_path = run_dir / "metadata.json"
+    if metadata_path.exists():
+        scenario_path = json.loads(metadata_path.read_text()).get("scenario")
+        if scenario_path:
+            _world.scenario = load_scenario(scenario_path)
+            _world.scenario_dotted_path = scenario_path
+
     with actions_path.open() as fh:
         for raw in fh:
             entry = json.loads(raw)
@@ -232,6 +260,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Talk to a live world at this URL (default: in-process TestClient).",
     )
     parser.add_argument("--replay", type=Path, help="Path to runs/{run_id} to replay.")
+    parser.add_argument(
+        "--scenario",
+        default=None,
+        help=(
+            "Dotted path to a Scenario subclass (e.g. scenarios.grid_stress). "
+            "Attached to the world before the agent runs."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.replay is not None:
@@ -239,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.agent:
         parser.error("either --agent or --replay is required")
-    return cmd_eval(args.agent, int(args.seed), args.api_url)
+    return cmd_eval(args.agent, int(args.seed), args.api_url, args.scenario)
 
 
 if __name__ == "__main__":
