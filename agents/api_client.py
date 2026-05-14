@@ -133,6 +133,15 @@ class ApiClient:
         return _parse(r)
 
 
+class UiAgentApiClient(ApiClient):
+    """ApiClient variant handed to agents attached via the UI's Agent Play
+    mode. The human owns the clock and the scenario; the agent owns world
+    mutations. Slice #4 fills in the clock-violation overrides (`step`,
+    `reset`, `attach_scenario` will raise client-side); this slice ships
+    the type only so the wiring is in place.
+    """
+
+
 def _parse(response: Any) -> Any:
     """Raise for non-2xx, then return parsed JSON. Works for httpx.Response
     and FastAPI TestClient responses (both expose status_code + .json()).

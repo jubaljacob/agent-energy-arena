@@ -8,22 +8,33 @@ runs/{run_id}/actions.jsonl.
 
 from __future__ import annotations
 
+import importlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 from starlette.types import Scope
 
+from agents.api_client import UiAgentApiClient
+from agents.base import BaseAgent
 from world.action_log import ActionLog
 from world.catalog import build_catalog
 from world.scenario import NullScenario, load_scenario
 from world.scoring import score as score_world
 from world.sim import World
 from world.subsurface import SEISMIC_DEFAULT_SIZE
+
+# Default repo root for `POST /agent/attach`. Tests can override via
+# `create_app(agent_repo_root=...)` so a `tmp_path` scratch dir counts as
+# the trust boundary; the production server uses the on-disk repo. Slice
+# #2 will tighten the failure surface; slice #1 ships only the floor.
+DEFAULT_AGENT_REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 
 
 class _NoStoreStaticFiles(StaticFiles):
@@ -95,6 +106,74 @@ class BatteryControlBody(BaseModel):
     charge_kw: float
 
 
+class AgentAttachBody(BaseModel):
+    folder: str
+
+
+def _load_agent_class_from_module(mod: Any) -> type[BaseAgent] | None:
+    """Mirror `evaluate._load_agent_class`'s lookup convention: prefer a
+    top-level `Agent` symbol bound to a class; otherwise walk module
+    attributes for a concrete `BaseAgent` subclass. Slice #1 ships the
+    same convention so a participant's submission works under both
+    `python evaluate.py` and the UI's Agent Play attach."""
+    cls = getattr(mod, "Agent", None)
+    if isinstance(cls, type) and issubclass(cls, BaseAgent) and cls is not BaseAgent:
+        return cls
+    for value in vars(mod).values():
+        if isinstance(value, type) and issubclass(value, BaseAgent) and value is not BaseAgent:
+            return value
+    return None
+
+
+def _resolve_agent_folder(repo_root: Path, folder: str) -> Path:
+    """Resolve `folder` against `repo_root` and assert it stays inside.
+
+    Slice #1 ships the security floor only — one `is_relative_to` boundary
+    check that subsumes absolute paths, `..` escapes, and symlink hops.
+    Slice #2 adds the full validation matrix with phase-naming detail.
+    """
+    candidate = (repo_root / folder).resolve()
+    root = repo_root.resolve()
+    if not candidate.is_relative_to(root):
+        raise ValueError(f"folder {folder!r} resolves outside the repo root")
+    if not candidate.is_dir():
+        raise ValueError(f"folder {folder!r} does not exist or is not a directory")
+    if not (candidate / "agent.py").is_file():
+        raise ValueError(f"folder {folder!r} has no agent.py")
+    return candidate
+
+
+def _purge_modules_under(folder: Path) -> None:
+    """Drop every entry in `sys.modules` whose `__file__` lives under
+    `folder`. Lets re-attach see edits to `agent.py` and its sibling
+    helpers; slice #5 adds the test that exercises the helper-reload
+    path."""
+    folder_str = str(folder)
+    for name in list(sys.modules):
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        modfile = getattr(mod, "__file__", None)
+        if modfile and modfile.startswith(folder_str):
+            del sys.modules[name]
+
+
+def _detach_agent(app: FastAPI) -> None:
+    """Drop the attached agent + remove the matching `sys.path` entry.
+
+    Idempotent: no-op when nothing is attached. Used by `POST /agent/detach`
+    and by `POST /reset` (auto-detach)."""
+    folder: Path | None = getattr(app.state, "attached_agent_folder_path", None)
+    if folder is not None:
+        folder_str = str(folder)
+        if folder_str in sys.path:
+            sys.path.remove(folder_str)
+        _purge_modules_under(folder)
+    app.state.attached_agent = None
+    app.state.attached_agent_folder = None
+    app.state.attached_agent_folder_path = None
+
+
 def _slice_actions_for_day(entries: list[dict[str, Any]], day: int) -> dict[str, Any]:
     """Slice `actions.jsonl` entries by successful `/step` / `/reset` boundaries.
 
@@ -148,6 +227,7 @@ def create_app(
     action_log: ActionLog | None = None,
     *,
     runs_root: str = "runs",
+    agent_repo_root: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Energy-AI Nexus", version="0.1.0")
 
@@ -172,6 +252,15 @@ def create_app(
         world.recorder is not None and action_log.dir == world.recorder.dir
     )
     app.state._runs_root = runs_root
+    # Agent Play (agent-play slice 01) — three pieces of attach state:
+    # the instantiated BaseAgent subclass, the folder slug a `GET /agent`
+    # reports, and the resolved Path used by detach to scrub `sys.path`.
+    app.state.attached_agent = None
+    app.state.attached_agent_folder = None
+    app.state.attached_agent_folder_path = None
+    app.state._agent_repo_root = (
+        agent_repo_root if agent_repo_root is not None else DEFAULT_AGENT_REPO_ROOT
+    )
 
     @app.get("/seed")
     def get_seed() -> dict[str, int]:
@@ -248,6 +337,58 @@ def create_app(
         app.state.action_log.append("/scenario", params, ok=True, result=result)
         return result
 
+    @app.get("/agent")
+    def get_agent() -> dict[str, Any]:
+        folder = getattr(app.state, "attached_agent_folder", None)
+        return {"folder": folder}
+
+    @app.post("/agent/attach")
+    def post_agent_attach(body: AgentAttachBody) -> dict[str, Any]:
+        # Detach any previously-attached agent first so re-attach is
+        # idempotent and the previous `sys.path` entry is cleaned up.
+        _detach_agent(app)
+        repo_root: Path = app.state._agent_repo_root
+        try:
+            folder_path = _resolve_agent_folder(repo_root, body.folder)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # Drop stale entries first, then point `sys.path` at the folder
+        # and import `agent`. The full validation/error matrix (per-phase
+        # detail, ImportError surfacing, etc.) is slice #2; the
+        # sibling-helper reload walk is slice #5. For now we purge any
+        # cached `agent` module so re-attach across tests/sessions sees
+        # the new file, plus anything previously loaded out of this
+        # folder.
+        _purge_modules_under(folder_path)
+        sys.modules.pop("agent", None)
+        folder_str = str(folder_path)
+        sys.path.insert(0, folder_str)
+        try:
+            importlib.invalidate_caches()
+            mod = importlib.import_module("agent")
+            cls = _load_agent_class_from_module(mod)
+            if cls is None:
+                raise ValueError(
+                    f"folder {body.folder!r} has no `Agent` class or BaseAgent subclass"
+                )
+            api_for_agent = UiAgentApiClient(transport=TestClient(app))
+            instance = cls(api_for_agent)
+        except Exception as exc:
+            if folder_str in sys.path:
+                sys.path.remove(folder_str)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        app.state.attached_agent = instance
+        app.state.attached_agent_folder = body.folder
+        app.state.attached_agent_folder_path = folder_path
+        return {"ok": True, "folder": body.folder}
+
+    @app.post("/agent/detach")
+    def post_agent_detach() -> dict[str, Any]:
+        _detach_agent(app)
+        return {"ok": True, "folder": None}
+
     @app.get("/run")
     def get_run() -> dict[str, Any]:
         recorder = app.state.world.recorder
@@ -284,6 +425,10 @@ def create_app(
     @app.post("/reset")
     def post_reset(body: ResetBody) -> dict[str, Any]:
         params = body.model_dump()
+        # Agent Play (slice 01): /reset wipes the world; the attached
+        # agent goes with it. Scenario state survives via the existing
+        # scenario-preservation branch below.
+        _detach_agent(app)
         scenario_instance = None
         if body.scenario is not None:
             try:
@@ -324,6 +469,13 @@ def create_app(
     @app.post("/step")
     def post_step(body: StepBody) -> dict[str, Any]:
         params = body.model_dump()
+        # Agent Play (slice 01): when an agent is attached, give it the
+        # chance to mutate the world before the day(s) advance. Slice #4
+        # wraps this in act-raised-exception handling; slice #1 just lets
+        # any error propagate to the existing /step failure branch.
+        attached_agent = getattr(app.state, "attached_agent", None)
+        if attached_agent is not None:
+            attached_agent.act(app.state.world.state_dict())
         try:
             summary = app.state.world.step(days=body.days)
             result = {

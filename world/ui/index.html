@@ -19,6 +19,12 @@
     <button id="next-day">Next Day</button>
     <button id="load-run" title="Load a recorded run folder (metadata.json + states.jsonl)">Load run</button>
     <input id="replay-files" type="file" webkitdirectory directory multiple hidden />
+    <button id="agent-play-btn" title="Attach an agent.py from a repo folder; the agent acts each /step">
+      <span id="agent-status-dot" class="agent-status-dot hidden"></span>
+      <span id="agent-play-label">Agent Play</span>
+      <span id="agent-folder-label" class="agent-folder-label hidden"></span>
+    </button>
+    <button id="agent-detach-btn" class="hidden" title="Detach the attached agent — human regains control">Detach</button>
   </header>
   <div id="replaybar" class="replay-bar hidden">
     <span id="replay-badge" class="replay-badge">(no run loaded)</span>
@@ -230,6 +236,22 @@
       <div class="modal-actions">
         <button id="modal-cancel">Cancel</button>
         <button id="modal-confirm" class="primary">Drill anyway</button>
+      </div>
+    </div>
+  </div>
+  <div id="agent-modal" class="modal-backdrop">
+    <div class="modal">
+      <h3>Attach an agent</h3>
+      <p>
+        Loads <code>agent.py</code> from a repo-relative folder. The agent's
+        <code>act(state)</code> runs once before every <code>/step</code>;
+        actions land in the action log the same way human-submitted ones do.
+      </p>
+      <label for="agent-folder-input">Folder</label>
+      <input id="agent-folder-input" type="text" value="submit" />
+      <div class="modal-actions">
+        <button id="agent-attach-cancel">Cancel</button>
+        <button id="agent-attach-confirm" class="primary">Attach</button>
       </div>
     </div>
   </div>

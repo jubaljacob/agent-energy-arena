@@ -70,6 +70,51 @@ body.peeking #sublist .modeItem {
 }
 #load-run:hover { background: #2a2d34; }
 
+/* Agent Play button + Detach (agent-play slice 01). The button surfaces
+   a red dot + attached folder slug while an agent is attached; clicking
+   it again is a no-op (the Detach button is the only path back). */
+#agent-play-btn, #agent-detach-btn {
+  padding: 0.5rem 0.75rem;
+  background: #2a2d34;
+  color: #e6e7ea;
+  border: 1px solid #393d46;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+#agent-play-btn:hover, #agent-detach-btn:hover { background: #393d46; }
+#agent-play-btn.attached { background: #1d3a25; border-color: #4ea3ff; }
+.agent-status-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: #ff5a5a;
+  box-shadow: 0 0 4px #ff5a5a;
+}
+.agent-status-dot.hidden { display: none; }
+.agent-folder-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  color: #b0e8c8;
+}
+.agent-folder-label.hidden { display: none; }
+#agent-detach-btn.hidden { display: none; }
+#agent-folder-input {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  margin: 0.5rem 0 1rem;
+  background: #1f2229;
+  color: #e6e7ea;
+  border: 1px solid #393d46;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+#agent-modal label { font-size: 0.8rem; color: #8b8f9a; }
+
 .replay-bar {
   display: flex;
   align-items: center;

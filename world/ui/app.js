@@ -2467,9 +2467,149 @@
   // itself, so the UI stays current without polling continuously. The
   // play/fast/pause timer (issue 10) is opt-in and dispatches to /step
   // (live) or `renderReplayFrame` (replay) on a setInterval.
+  // Agent Play attach/detach (agent-play slice 01). The Agent Play button
+  // opens a modal with one text input; clicking Attach POSTs to
+  // /agent/attach. Success surfaces a red dot + folder slug on the button
+  // and reveals Detach. While attached the button itself is a no-op —
+  // detach is the only way back to human play. This slice ships the
+  // tracer-bullet UX; mutation lock + crash safety land in slices #3 / #4.
+  const agentPlayBtn = document.getElementById("agent-play-btn");
+  const agentDetachBtn = document.getElementById("agent-detach-btn");
+  const agentStatusDot = document.getElementById("agent-status-dot");
+  const agentFolderLabel = document.getElementById("agent-folder-label");
+  const agentModal = document.getElementById("agent-modal");
+  const agentFolderInput = document.getElementById("agent-folder-input");
+  const agentAttachConfirm = document.getElementById("agent-attach-confirm");
+  const agentAttachCancel = document.getElementById("agent-attach-cancel");
+  let attachedAgentFolder = null;
+
+  function isAgentAttached() {
+    return attachedAgentFolder !== null;
+  }
+
+  function renderAgentButton() {
+    if (!agentPlayBtn) return;
+    if (isAgentAttached()) {
+      agentPlayBtn.classList.add("attached");
+      if (agentStatusDot) agentStatusDot.classList.remove("hidden");
+      if (agentFolderLabel) {
+        agentFolderLabel.textContent = attachedAgentFolder;
+        agentFolderLabel.classList.remove("hidden");
+      }
+      if (agentDetachBtn) agentDetachBtn.classList.remove("hidden");
+    } else {
+      agentPlayBtn.classList.remove("attached");
+      if (agentStatusDot) agentStatusDot.classList.add("hidden");
+      if (agentFolderLabel) {
+        agentFolderLabel.textContent = "";
+        agentFolderLabel.classList.add("hidden");
+      }
+      if (agentDetachBtn) agentDetachBtn.classList.add("hidden");
+    }
+  }
+
+  async function refreshAgentStatus() {
+    try {
+      const res = await fetch("/agent");
+      if (!res.ok) return;
+      const body = await res.json();
+      attachedAgentFolder = body.folder == null ? null : body.folder;
+      renderAgentButton();
+    } catch (err) {
+      // ignore — boot race
+    }
+  }
+
+  function openAgentModal() {
+    if (!agentModal) return;
+    if (agentFolderInput && !agentFolderInput.value) agentFolderInput.value = "submit";
+    agentModal.classList.add("show");
+    if (agentFolderInput) {
+      agentFolderInput.focus();
+      agentFolderInput.select();
+    }
+  }
+  function closeAgentModal() {
+    if (agentModal) agentModal.classList.remove("show");
+  }
+
+  async function postAgentAttach(folder) {
+    try {
+      const res = await fetch("/agent/attach", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ folder }),
+      });
+      if (!res.ok) {
+        let detail = String(res.status);
+        try {
+          const body = await res.json();
+          detail = body.detail || detail;
+        } catch (err) {
+          // ignore
+        }
+        showToast(`agent attach failed: ${detail}`, "error");
+        return false;
+      }
+      const body = await res.json();
+      attachedAgentFolder = body.folder;
+      renderAgentButton();
+      showToast(`agent attached: ${body.folder}`, "ok");
+      return true;
+    } catch (err) {
+      showToast(`network error: ${err}`, "error");
+      return false;
+    }
+  }
+
+  async function postAgentDetach() {
+    try {
+      const res = await fetch("/agent/detach", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      if (!res.ok) {
+        showToast(`agent detach failed: HTTP ${res.status}`, "error");
+        return;
+      }
+      attachedAgentFolder = null;
+      renderAgentButton();
+      showToast("agent detached", "ok");
+    } catch (err) {
+      showToast(`network error: ${err}`, "error");
+    }
+  }
+
+  if (agentPlayBtn) {
+    agentPlayBtn.addEventListener("click", () => {
+      // No-op while attached — the human re-takes control via Detach.
+      if (isAgentAttached()) return;
+      openAgentModal();
+    });
+  }
+  if (agentAttachCancel) {
+    agentAttachCancel.addEventListener("click", () => closeAgentModal());
+  }
+  if (agentAttachConfirm && agentFolderInput) {
+    agentAttachConfirm.addEventListener("click", async () => {
+      const val = (agentFolderInput.value || "").trim();
+      if (!val) {
+        showToast("folder is required", "error");
+        return;
+      }
+      const ok = await postAgentAttach(val);
+      if (ok) closeAgentModal();
+    });
+  }
+  if (agentDetachBtn) {
+    agentDetachBtn.addEventListener("click", () => postAgentDetach());
+  }
+
   loadCatalog();
   drawGrid();
   tick();
   refreshScenarioReadout();
+  refreshAgentStatus();
   updatePeekButtons();
 })();
