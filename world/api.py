@@ -146,17 +146,27 @@ def _resolve_agent_folder(repo_root: Path, folder: str) -> Path:
 
 def _purge_modules_under(folder: Path) -> None:
     """Drop every entry in `sys.modules` whose `__file__` lives under
-    `folder`. Lets re-attach see edits to `agent.py` and its sibling
-    helpers; slice #5 adds the test that exercises the helper-reload
-    path."""
-    folder_str = str(folder)
+    `folder`. Lets re-attach see edits to `agent.py` *and* its sibling
+    helpers (`helpers.py`, `strategy.py`, ...). Without this walk,
+    popping only `sys.modules["agent"]` would silently re-use the stale
+    helper modules cached from the previous attach.
+
+    Containment is checked with `Path.is_relative_to` (not string
+    prefix), so a folder `/tmp/foo` does not accidentally match modules
+    under `/tmp/foobar`.
+    """
     for name in list(sys.modules):
         mod = sys.modules.get(name)
         if mod is None:
             continue
         modfile = getattr(mod, "__file__", None)
-        if modfile and modfile.startswith(folder_str):
-            del sys.modules[name]
+        if not modfile:
+            continue
+        try:
+            if Path(modfile).is_relative_to(folder):
+                del sys.modules[name]
+        except ValueError:
+            continue
 
 
 def _detach_agent(app: FastAPI) -> None:
@@ -376,18 +386,33 @@ def create_app(
                 detail=f"failed to load agent from {folder!r}: bad input: {exc}",
             ) from exc
 
+        # Hot-reload loop (slice #5): `_detach_agent` above already
+        # walked `sys.modules` for the previously-attached folder and
+        # removed its `sys.path` entry — so on re-attach, edits to
+        # `agent.py` *and* its sibling helpers (`helpers.py`,
+        # `strategy.py`, ...) are picked up from disk.
+        #
+        # Pop `"agent"` defensively: the walk above covers the
+        # *currently-tracked* attach state on this app, but `sys.modules`
+        # is process-global. A prior attach against a different `app`
+        # instance (e.g. across test cases) can leave `sys.modules["agent"]`
+        # pointing at a folder this app has never heard of, which would
+        # otherwise short-circuit our fresh `import_module("agent")`.
+        # `invalidate_caches` before `sys.path.insert` keeps importlib's
+        # finder cache honest in case a prior import poisoned a "missing"
+        # entry for a path we now want resolved.
+        #
         # Loading phases (import → lookup → validate → construct) share
         # one try/except so the developer gets the same detail shape for
         # every loading failure: `failed to load agent from <input>:
         # <ExceptionType>: <message>`. Surfaces ImportError, missing
         # class, and `__init__` exceptions verbatim — enough to debug
         # without grepping server logs.
-        _purge_modules_under(folder_path)
         sys.modules.pop("agent", None)
+        importlib.invalidate_caches()
         folder_str = str(folder_path)
         sys.path.insert(0, folder_str)
         try:
-            importlib.invalidate_caches()
             mod = importlib.import_module("agent")
             cls = _load_agent_class_from_module(mod)
             if cls is None:

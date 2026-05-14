@@ -28,6 +28,13 @@ Slice #4 adds:
   * An agent that accidentally calls `self.api.step()` from `act()` hits
     the same 500 path via the client-side guard — the action log never
     sees the rejected request.
+
+Slice #5 adds:
+  * Re-attaching a folder reloads `agent.py` *and* its sibling helpers
+    (`helpers.py`, ...) from disk — the new constant is visible to the
+    next `act()` call.
+  * Attach folder A, then attach folder B: `sys.path` contains B's
+    folder, not A's.
 """
 
 from __future__ import annotations
@@ -536,3 +543,114 @@ def test_agent_calling_api_step_returns_500_and_stays_attached(tmp_path: Path) -
     active_log: ActionLog = app.state.action_log
     step_entries = [e for e in _entries(active_log) if e["endpoint"] == "/step" and e["ok"]]
     assert step_entries == []
+
+
+# -- Slice #5: hot-reload loop for edited code ----------------------------
+
+
+def _write_file(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(textwrap.dedent(body).lstrip())
+
+
+def test_reattach_reloads_sibling_helper_from_disk(tmp_path: Path) -> None:
+    """The edit → Detach → Attach → see-new-behavior loop covers helpers,
+    not just `agent.py`. Without the `__file__` walk in `_purge_modules_under`,
+    `import_module("agent")` re-uses the cached `helpers` module and the
+    second `act()` still sees the *old* constant — silently breaking the
+    promise the PRD makes.
+
+    The agent surfaces the helper's constant as the `x` parameter of a
+    `/build` call. We inspect `actions.jsonl` rather than world state so
+    the assertion does not depend on the build being placeable at the
+    chosen coordinate — the *param* is the witness.
+    """
+    import sys
+
+    folder = tmp_path / "helperagent"
+    _write_file(
+        folder / "helpers.py",
+        """
+        ROAD_X = 5
+        """,
+    )
+    _write_file(
+        folder / "agent.py",
+        """
+        from agents.base import BaseAgent
+        from helpers import ROAD_X
+        class Agent(BaseAgent):
+            def act(self, state):
+                self.api.build("road", ROAD_X, 0)
+        """,
+    )
+    client, app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    client.post("/reset", json={"seed": 42})
+
+    assert client.post("/agent/attach", json={"folder": "helperagent"}).status_code == 200
+    assert client.post("/step", json={"days": 1}).status_code == 200
+
+    builds_v1 = [e for e in _entries(app.state.action_log) if e["endpoint"] == "/build"]
+    assert len(builds_v1) == 1
+    assert builds_v1[0]["params"]["x"] == 5
+
+    # Rewrite the helper, detach + re-attach, step again. The second build's
+    # `x` param must reflect the *new* helper constant — proof the helper
+    # reloaded from disk.
+    _write_file(folder / "helpers.py", "ROAD_X = 9\n")
+    # Force a future mtime so importlib's `.pyc` invalidation triggers
+    # even when both writes land in the same wall-clock second. In real
+    # usage a human takes seconds between edits, so the file's mtime
+    # advances naturally; the test reproduces that explicitly.
+    import os
+    import time
+
+    future = time.time() + 10
+    os.utime(folder / "helpers.py", (future, future))
+    assert client.post("/agent/detach", json={}).status_code == 200
+    assert client.post("/agent/attach", json={"folder": "helperagent"}).status_code == 200
+    assert client.post("/step", json={"days": 1}).status_code == 200
+
+    builds_v2 = [e for e in _entries(app.state.action_log) if e["endpoint"] == "/build"]
+    assert len(builds_v2) == 2
+    assert builds_v2[1]["params"]["x"] == 9
+
+    # Detach scrubs the sys.path entry the matching attach added.
+    client.post("/agent/detach", json={})
+    assert str(folder) not in sys.path
+
+
+def test_attach_switches_sys_path_when_folder_changes(tmp_path: Path) -> None:
+    """Attach folder A, then attach folder B without detaching first:
+    `sys.path` reflects B and contains no entry for A. Without the
+    `_detach_agent` call at the top of `post_agent_attach`, A's path
+    would linger and contend with B for module lookups."""
+    import sys
+
+    _write_agent(
+        tmp_path / "alpha",
+        """
+        from agents.base import BaseAgent
+        class Agent(BaseAgent): pass
+        """,
+    )
+    _write_agent(
+        tmp_path / "beta",
+        """
+        from agents.base import BaseAgent
+        class Agent(BaseAgent): pass
+        """,
+    )
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+
+    assert client.post("/agent/attach", json={"folder": "alpha"}).status_code == 200
+    alpha_path = str((tmp_path / "alpha").resolve())
+    assert alpha_path in sys.path
+
+    assert client.post("/agent/attach", json={"folder": "beta"}).status_code == 200
+    beta_path = str((tmp_path / "beta").resolve())
+    assert beta_path in sys.path
+    assert alpha_path not in sys.path
+
+    client.post("/agent/detach", json={})
+    assert beta_path not in sys.path
