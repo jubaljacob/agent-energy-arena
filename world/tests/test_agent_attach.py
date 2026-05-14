@@ -116,6 +116,9 @@ def test_attach_rejects_absolute_path(tmp_path: Path) -> None:
     client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
     r = client.post("/agent/attach", json={"folder": "/etc"})
     assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "failed to load agent from '/etc'" in detail
+    assert "bad input" in detail
 
 
 def test_attach_rejects_path_outside_repo_root(tmp_path: Path) -> None:
@@ -128,12 +131,57 @@ def test_attach_rejects_path_outside_repo_root(tmp_path: Path) -> None:
     client, _app, _world, _log = _client(tmp_path, agent_repo_root=inside_root)
     r = client.post("/agent/attach", json={"folder": "../outside"})
     assert r.status_code == 400
+    assert "bad input" in r.json()["detail"]
+
+
+def test_attach_rejects_dotted_python_path(tmp_path: Path) -> None:
+    """`submit.agent` is a Python dotted path — reject before any filesystem
+    access so the developer is not silently confused about path semantics."""
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    r = client.post("/agent/attach", json={"folder": "submit.agent"})
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "failed to load agent from 'submit.agent'" in detail
+    assert "bad input" in detail
+
+
+def test_attach_rejects_dot_dot(tmp_path: Path) -> None:
+    """`..` is caught by the dot-rejection rule, same as `submit.agent`."""
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    r = client.post("/agent/attach", json={"folder": ".."})
+    assert r.status_code == 400
+    assert "bad input" in r.json()["detail"]
+
+
+def test_attach_rejects_hidden_folder(tmp_path: Path) -> None:
+    """`.hidden` is caught by the dot-rejection rule, same as `submit.agent`."""
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    r = client.post("/agent/attach", json={"folder": ".hidden"})
+    assert r.status_code == 400
+    assert "bad input" in r.json()["detail"]
+
+
+def test_attach_rejects_symlink_escape(tmp_path: Path) -> None:
+    """A symlink inside the repo root that resolves outside the root is
+    rejected by the same `is_relative_to(repo_root.resolve())` boundary
+    check that catches absolute paths and `..`."""
+    inside_root = tmp_path / "inside"
+    inside_root.mkdir()
+    outside = tmp_path / "outside"
+    _write_agent(outside, "from agents.base import BaseAgent\nclass Agent(BaseAgent): pass\n")
+    (inside_root / "escape").symlink_to(outside, target_is_directory=True)
+
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=inside_root)
+    r = client.post("/agent/attach", json={"folder": "escape"})
+    assert r.status_code == 400
+    assert "bad input" in r.json()["detail"]
 
 
 def test_attach_rejects_missing_folder(tmp_path: Path) -> None:
     client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
     r = client.post("/agent/attach", json={"folder": "does_not_exist"})
     assert r.status_code == 400
+    assert "bad input" in r.json()["detail"]
 
 
 def test_attach_rejects_folder_without_agent_py(tmp_path: Path) -> None:
@@ -141,6 +189,30 @@ def test_attach_rejects_folder_without_agent_py(tmp_path: Path) -> None:
     client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
     r = client.post("/agent/attach", json={"folder": "empty"})
     assert r.status_code == 400
+    assert "bad input" in r.json()["detail"]
+
+
+def test_attach_surfaces_import_error_in_detail(tmp_path: Path) -> None:
+    """A module that imports a missing dependency should surface the
+    ImportError verbatim in the detail so the developer can diagnose
+    without grepping server logs."""
+    _write_agent(
+        tmp_path / "brokenimport",
+        """
+        import nonexistent_module_xyz  # noqa: F401
+        from agents.base import BaseAgent
+        class Agent(BaseAgent):
+            pass
+        """,
+    )
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    r = client.post("/agent/attach", json={"folder": "brokenimport"})
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "failed to load agent from 'brokenimport'" in detail
+    # ImportError / ModuleNotFoundError name + message surface verbatim.
+    assert "nonexistent_module_xyz" in detail
+    assert "ModuleNotFoundError" in detail or "ImportError" in detail
 
 
 def test_attach_rejects_module_without_baseagent_subclass(tmp_path: Path) -> None:
@@ -154,6 +226,30 @@ def test_attach_rejects_module_without_baseagent_subclass(tmp_path: Path) -> Non
     client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
     r = client.post("/agent/attach", json={"folder": "barebones"})
     assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "failed to load agent from 'barebones'" in detail
+
+
+def test_attach_surfaces_init_error_in_detail(tmp_path: Path) -> None:
+    """When the agent's `__init__` raises, the exception type and message
+    surface verbatim in the detail so the developer can debug missing API
+    keys, bad imports in __init__, or signature mistakes."""
+    _write_agent(
+        tmp_path / "badinit",
+        """
+        from agents.base import BaseAgent
+        class Agent(BaseAgent):
+            def __init__(self, api, *, seed=None):
+                raise RuntimeError("missing API key XYZ")
+        """,
+    )
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    r = client.post("/agent/attach", json={"folder": "badinit"})
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "failed to load agent from 'badinit'" in detail
+    assert "RuntimeError" in detail
+    assert "missing API key XYZ" in detail
 
 
 # -- POST /agent/detach ---------------------------------------------------

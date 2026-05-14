@@ -32,8 +32,7 @@ from world.subsurface import SEISMIC_DEFAULT_SIZE
 
 # Default repo root for `POST /agent/attach`. Tests can override via
 # `create_app(agent_repo_root=...)` so a `tmp_path` scratch dir counts as
-# the trust boundary; the production server uses the on-disk repo. Slice
-# #2 will tighten the failure surface; slice #1 ships only the floor.
+# the trust boundary; the production server uses the on-disk repo.
 DEFAULT_AGENT_REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 
 
@@ -128,9 +127,11 @@ def _load_agent_class_from_module(mod: Any) -> type[BaseAgent] | None:
 def _resolve_agent_folder(repo_root: Path, folder: str) -> Path:
     """Resolve `folder` against `repo_root` and assert it stays inside.
 
-    Slice #1 ships the security floor only — one `is_relative_to` boundary
-    check that subsumes absolute paths, `..` escapes, and symlink hops.
-    Slice #2 adds the full validation matrix with phase-naming detail.
+    One `is_relative_to(repo_root.resolve())` boundary check on the
+    resolved candidate subsumes absolute paths and symlink-escape hops
+    (resolve() walks symlinks). Pre-filesystem dot-rejection in the
+    handler catches Python dotted paths (`submit.agent`), `..`, and
+    hidden dirs before we touch the filesystem.
     """
     candidate = (repo_root / folder).resolve()
     root = repo_root.resolve()
@@ -347,19 +348,40 @@ def create_app(
         # Detach any previously-attached agent first so re-attach is
         # idempotent and the previous `sys.path` entry is cleaned up.
         _detach_agent(app)
+        folder = body.folder
         repo_root: Path = app.state._agent_repo_root
-        try:
-            folder_path = _resolve_agent_folder(repo_root, body.folder)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        # Drop stale entries first, then point `sys.path` at the folder
-        # and import `agent`. The full validation/error matrix (per-phase
-        # detail, ImportError surfacing, etc.) is slice #2; the
-        # sibling-helper reload walk is slice #5. For now we purge any
-        # cached `agent` module so re-attach across tests/sessions sees
-        # the new file, plus anything previously loaded out of this
-        # folder.
+        # Bad-input phase: reject anything containing '.' before any
+        # filesystem access. Catches Python dotted paths ("submit.agent"),
+        # parent escapes (".."), and hidden dirs (".hidden"). Path-safety
+        # boundary + existence checks happen next.
+        if "." in folder:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"failed to load agent from {folder!r}: bad input: "
+                    "folder must not contain '.' "
+                    "(pass a plain folder name, not a Python dotted path)"
+                ),
+            )
+
+        # Bad-input phase: filesystem boundary + existence. One
+        # `is_relative_to(repo_root.resolve())` check subsumes absolute
+        # paths and symlink escapes.
+        try:
+            folder_path = _resolve_agent_folder(repo_root, folder)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"failed to load agent from {folder!r}: bad input: {exc}",
+            ) from exc
+
+        # Loading phases (import → lookup → validate → construct) share
+        # one try/except so the developer gets the same detail shape for
+        # every loading failure: `failed to load agent from <input>:
+        # <ExceptionType>: <message>`. Surfaces ImportError, missing
+        # class, and `__init__` exceptions verbatim — enough to debug
+        # without grepping server logs.
         _purge_modules_under(folder_path)
         sys.modules.pop("agent", None)
         folder_str = str(folder_path)
@@ -369,15 +391,16 @@ def create_app(
             mod = importlib.import_module("agent")
             cls = _load_agent_class_from_module(mod)
             if cls is None:
-                raise ValueError(
-                    f"folder {body.folder!r} has no `Agent` class or BaseAgent subclass"
-                )
+                raise ValueError(f"folder {folder!r} has no `Agent` class or BaseAgent subclass")
             api_for_agent = UiAgentApiClient(transport=TestClient(app))
             instance = cls(api_for_agent)
         except Exception as exc:
             if folder_str in sys.path:
                 sys.path.remove(folder_str)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=400,
+                detail=f"failed to load agent from {folder!r}: {type(exc).__name__}: {exc}",
+            ) from exc
 
         app.state.attached_agent = instance
         app.state.attached_agent_folder = body.folder
