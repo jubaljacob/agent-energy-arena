@@ -61,7 +61,7 @@ def test_scripted_matches_committed_baseline() -> None:
     the committed `baselines/seed_42.json`. If the agent's strategy is changed
     intentionally, regenerate the baseline via:
 
-        python -m agents.scripted --seed 42 --output baselines/seed_42.json
+        python -m agents.scripted.agent --seed 42 --output baselines/seed_42.json
     """
     payload = json.loads(BASELINE_PATH.read_text())
     p_ref = float(payload["p_ref"])

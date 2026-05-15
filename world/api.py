@@ -30,6 +30,9 @@ from world.scoring import score as score_world
 from world.sim import World
 from world.subsurface import SEISMIC_DEFAULT_SIZE
 
+from dotenv import load_dotenv
+load_dotenv()  # silent no-op if .env is absent
+
 # Default repo root for `POST /agent/attach`. Tests can override via
 # `create_app(agent_repo_root=...)` so a `tmp_path` scratch dir counts as
 # the trust boundary; the production server uses the on-disk repo.
@@ -122,6 +125,47 @@ def _load_agent_class_from_module(mod: Any) -> type[BaseAgent] | None:
         if isinstance(value, type) and issubclass(value, BaseAgent) and value is not BaseAgent:
             return value
     return None
+
+
+# Directories that never contain attachable agents and would otherwise
+# bloat `GET /agent/folders` or slow the walk (notably `runs/` after a
+# few sessions, and the third-party tree under `node_modules/`). Hidden
+# dirs are excluded by the leading-dot check at the walk site.
+_AGENT_FOLDER_WALK_SKIP: frozenset[str] = frozenset({"__pycache__", "node_modules", "runs"})
+
+
+def _list_attachable_agent_folders(repo_root: Path) -> list[str]:
+    """Return repo-relative folder paths that contain an `agent.py`.
+
+    Powers `GET /agent/folders`, which the UI uses to populate the
+    Agent Play dropdown. Sorted alphabetically so the UI renders in a
+    stable order across requests. Skips hidden dirs (leading `.`) and
+    the entries in `_AGENT_FOLDER_WALK_SKIP`; does not follow symlinks
+    (`Path.iterdir` is non-recursive — the recursion here uses the
+    same boundary rules as `_resolve_agent_folder`).
+    """
+    root = repo_root.resolve()
+    found: list[str] = []
+
+    def walk(current: Path) -> None:
+        try:
+            entries = list(current.iterdir())
+        except (PermissionError, OSError):
+            return
+        if any(e.name == "agent.py" and e.is_file() for e in entries):
+            rel = current.relative_to(root).as_posix()
+            if rel != ".":
+                found.append(rel)
+        for entry in entries:
+            if not entry.is_dir() or entry.is_symlink():
+                continue
+            if entry.name.startswith(".") or entry.name in _AGENT_FOLDER_WALK_SKIP:
+                continue
+            walk(entry)
+
+    walk(root)
+    found.sort()
+    return found
 
 
 def _resolve_agent_folder(repo_root: Path, folder: str) -> Path:
@@ -352,6 +396,11 @@ def create_app(
     def get_agent() -> dict[str, Any]:
         folder = getattr(app.state, "attached_agent_folder", None)
         return {"folder": folder}
+
+    @app.get("/agent/folders")
+    def get_agent_folders() -> dict[str, Any]:
+        repo_root: Path = app.state._agent_repo_root
+        return {"folders": _list_attachable_agent_folders(repo_root)}
 
     @app.post("/agent/attach")
     def post_agent_attach(body: AgentAttachBody) -> dict[str, Any]:

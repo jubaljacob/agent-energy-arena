@@ -97,6 +97,38 @@ def test_get_agent_returns_null_on_fresh_world(tmp_path: Path) -> None:
     assert r.json() == {"folder": None}
 
 
+# -- GET /agent/folders ---------------------------------------------------
+
+
+def test_list_agent_folders_returns_empty_when_repo_empty(tmp_path: Path) -> None:
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    r = client.get("/agent/folders")
+    assert r.status_code == 200
+    assert r.json() == {"folders": []}
+
+
+def test_list_agent_folders_finds_nested_agent_py(tmp_path: Path) -> None:
+    _write_agent(tmp_path / "submit", "x = 1\n")
+    _write_agent(tmp_path / "agents" / "scripted", "x = 1\n")
+    _write_agent(tmp_path / "agents" / "rl", "x = 1\n")
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    r = client.get("/agent/folders")
+    assert r.status_code == 200
+    assert r.json() == {"folders": ["agents/rl", "agents/scripted", "submit"]}
+
+
+def test_list_agent_folders_skips_hidden_and_pycache(tmp_path: Path) -> None:
+    _write_agent(tmp_path / "visible", "x = 1\n")
+    _write_agent(tmp_path / ".hidden", "x = 1\n")
+    _write_agent(tmp_path / "__pycache__", "x = 1\n")
+    _write_agent(tmp_path / "node_modules" / "pkg", "x = 1\n")
+    _write_agent(tmp_path / "runs" / "abc", "x = 1\n")
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    r = client.get("/agent/folders")
+    assert r.status_code == 200
+    assert r.json() == {"folders": ["visible"]}
+
+
 # -- POST /agent/attach ---------------------------------------------------
 
 

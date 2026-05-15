@@ -35,9 +35,9 @@ Community agents live under `agents/community/`. The PR-as-submission flow:
 
 1. **One file per submission.** Place your agent at `agents/community/<your_handle>.py`. If you genuinely need helper modules, drop them in a subdirectory (`agents/community/<your_handle>/`) and import within.
 2. **Header docstring.** Top of the file: a one-paragraph summary naming the author, the approach (rule-based / LLM / hybrid / something else), and any external dependencies. Cite the score range you achieved locally on seed 42.
-3. **Conform to the `Agent` protocol.** Either subclass `agents.base.BaseAgent` (override `act(state)` and optionally `next_step_days(state)`) or implement `play_game() -> dict` directly. See [`agents/base.py`](agents/base.py) and the reference agents in `agents/scripted.py`, `agents/llm_react.py`.
+3. **Conform to the `Agent` protocol.** Either subclass `agents.base.BaseAgent` (override `act(state)` and optionally `next_step_days(state)`) or implement `play_game() -> dict` directly. See [`agents/base.py`](agents/base.py) and the reference agents in `agents/scripted/agent.py`, `agents/llm_react/agent.py`.
 4. **Stay within the v1 budget.** Soft caps: ≤ 5 minutes wall-clock per evaluation seed, ≤ 500,000 LLM tokens per game if you use an LLM. The runner does not enforce these; the maintainer reviewing your PR will.
-5. **No edits outside `agents/community/<you>/`.** Do not modify `world/`, `agents/base.py`, `agents/api_client.py`, `agents/scripted.py`, or `arena/`. If your approach requires a world change, open a separate issue first.
+5. **No edits outside `agents/community/<you>/`.** Do not modify `world/`, `agents/base.py`, `agents/api_client.py`, `agents/scripted/`, or `arena/`. If your approach requires a world change, open a separate issue first.
 6. **Verify locally.** `make check` must pass. If you added a test (recommended), it goes under `agents/tests/community_<you>.py`.
 7. **Open a PR.** Include in the description: the score on seed 42 against the committed `baselines/seed_42.json`, and the arena leaderboard rows your agent earned on the three public scenarios (`baseline`, `grid_stress`, `economy_stress`) via `make baselines`-style runs. A maintainer will re-run on merge and regenerate `LEADERBOARD.md`.
 

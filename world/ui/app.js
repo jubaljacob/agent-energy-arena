@@ -2490,7 +2490,7 @@
   const agentStatusDot = document.getElementById("agent-status-dot");
   const agentFolderLabel = document.getElementById("agent-folder-label");
   const agentModal = document.getElementById("agent-modal");
-  const agentFolderInput = document.getElementById("agent-folder-input");
+  const agentFolderSelect = document.getElementById("agent-folder-select");
   const agentAttachConfirm = document.getElementById("agent-attach-confirm");
   const agentAttachCancel = document.getElementById("agent-attach-cancel");
   // `attachedAgentFolder` and `isAgentAttached()` are hoisted to the top of
@@ -2534,14 +2534,62 @@
     }
   }
 
+  async function populateAgentFolderSelect() {
+    if (!agentFolderSelect) return;
+    // Clear stale options before fetching so a slow request doesn't
+    // leave the previous list visible alongside a "loading" hint.
+    agentFolderSelect.innerHTML = "";
+    const loading = document.createElement("option");
+    loading.textContent = "Loading…";
+    loading.disabled = true;
+    agentFolderSelect.appendChild(loading);
+    agentFolderSelect.disabled = true;
+    if (agentAttachConfirm) agentAttachConfirm.disabled = true;
+    try {
+      const res = await fetch("/agent/folders");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      const folders = Array.isArray(body.folders) ? body.folders : [];
+      agentFolderSelect.innerHTML = "";
+      if (folders.length === 0) {
+        const opt = document.createElement("option");
+        opt.textContent = "no folders with agent.py found";
+        opt.disabled = true;
+        agentFolderSelect.appendChild(opt);
+        agentFolderSelect.disabled = true;
+        return;
+      }
+      for (const folder of folders) {
+        const opt = document.createElement("option");
+        opt.value = folder;
+        opt.textContent = folder;
+        agentFolderSelect.appendChild(opt);
+      }
+      // Prefer the canonical participant submission folder when present;
+      // otherwise fall back to the first listed folder.
+      const preferred = folders.includes("submit") ? "submit" : folders[0];
+      agentFolderSelect.value = preferred;
+      agentFolderSelect.disabled = false;
+      if (agentAttachConfirm) agentAttachConfirm.disabled = false;
+    } catch (err) {
+      agentFolderSelect.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.textContent = "failed to load folders";
+      opt.disabled = true;
+      agentFolderSelect.appendChild(opt);
+      agentFolderSelect.disabled = true;
+      showToast(`could not list agent folders: ${err}`, "error");
+    }
+  }
+
   function openAgentModal() {
     if (!agentModal) return;
-    if (agentFolderInput && !agentFolderInput.value) agentFolderInput.value = "submit";
     agentModal.classList.add("show");
-    if (agentFolderInput) {
-      agentFolderInput.focus();
-      agentFolderInput.select();
-    }
+    populateAgentFolderSelect().then(() => {
+      if (agentFolderSelect && !agentFolderSelect.disabled) {
+        agentFolderSelect.focus();
+      }
+    });
   }
   function closeAgentModal() {
     if (agentModal) agentModal.classList.remove("show");
@@ -2610,9 +2658,9 @@
   if (agentAttachCancel) {
     agentAttachCancel.addEventListener("click", () => closeAgentModal());
   }
-  if (agentAttachConfirm && agentFolderInput) {
+  if (agentAttachConfirm && agentFolderSelect) {
     agentAttachConfirm.addEventListener("click", async () => {
-      const val = (agentFolderInput.value || "").trim();
+      const val = (agentFolderSelect.value || "").trim();
       if (!val) {
         showToast("folder is required", "error");
         return;

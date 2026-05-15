@@ -16,7 +16,7 @@ All decisions follow strict deterministic priority ordering (see
 capacity → carbon-driven coal demolition → reservoir re-exploration →
 drilling → refinery → DR-injection siting → skip.
 
-Run end-to-end via `python -m agents.scripted --seed 42 --output
+Run end-to-end via `python -m agents.scripted.agent --seed 42 --output
 baselines/seed_42.json` to write the baseline file consumed by
 `/score`.
 """
@@ -836,6 +836,11 @@ def main(argv: list[str] | None = None) -> int:
     if not (math.isfinite(p_ref) and math.isfinite(t_ref)):
         return 1
     return 0
+
+
+# Agent Play attach contract: the handler prefers a top-level `Agent`
+# symbol that is a BaseAgent subclass (`world.api.post_agent_attach`).
+Agent = ScriptedAgent
 
 
 if __name__ == "__main__":

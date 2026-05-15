@@ -20,8 +20,8 @@ The `langgraph` package is an OPTIONAL dependency declared under
 construction time.
 
 CLI:
-  python -m agents.langgraph_agent --seed 42 --days 30   # short demo
-  python -m agents.langgraph_agent --seed 42 --full      # full game
+  python -m agents.langgraph_agent.agent --seed 42 --days 30   # short demo
+  python -m agents.langgraph_agent.agent --seed 42 --full      # full game
 
 When LLM_API_KEY is unset, the CLI plugs in a `MockLLM` that loops
 `step(days=7)` so the offline demo finishes deterministically.
@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from agents.api_client import ApiClient
+from agents.base import BaseAgent
 from agents.llm import LLMClient, LLMResponse, MockLLM, ToolCall, Usage, make_llm_from_env
 from agents.prompts import ACTION_TOOLS, SYSTEM_PROMPT
 from agents.state_summary import summarize_state
@@ -74,9 +75,17 @@ class GraphState(TypedDict, total=False):
     turn: int
 
 
-class LangGraphAgent:
+class LangGraphAgent(BaseAgent):
     """Graph-based reference agent. Implements the `Agent` protocol
-    (`__init__(api, *, seed=None)` + `play_game() -> dict`)."""
+    (`__init__(api, *, seed=None)` + `play_game() -> dict`).
+
+    Subclasses `BaseAgent` so the Agent Play attach handler accepts it,
+    but overrides `play_game()` entirely — the per-turn `act(state)`
+    hook is the no-op inherited default. Agent Play attach therefore
+    loads the class without errors but the agent contributes nothing
+    per `/step`; use the CLI (`python -m agents.langgraph_agent.agent`)
+    for a full game run.
+    """
 
     def __init__(
         self,
@@ -431,6 +440,11 @@ def main(argv: list[str] | None = None) -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(payload, indent=2) + "\n")
     return 0
+
+
+# Agent Play attach contract: the handler prefers a top-level `Agent`
+# symbol that is a BaseAgent subclass (`world.api.post_agent_attach`).
+Agent = LangGraphAgent
 
 
 if __name__ == "__main__":

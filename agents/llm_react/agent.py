@@ -268,5 +268,10 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+# Agent Play attach contract: the handler prefers a top-level `Agent`
+# symbol that is a BaseAgent subclass (`world.api.post_agent_attach`).
+Agent = LLMReactAgent
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

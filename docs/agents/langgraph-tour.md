@@ -1,8 +1,8 @@
 # LangGraph reference agent — one-turn tour
 
-A worked-example agent at [`agents/langgraph_agent.py`](../../agents/langgraph_agent.py)
+A worked-example agent at [`agents/langgraph_agent/agent.py`](../../agents/langgraph_agent/agent.py)
 that wires every world endpoint into a graph. Sister to the minimal
-ReAct loop at [`agents/llm_react.py`](../../agents/llm_react.py); both
+ReAct loop at [`agents/llm_react/agent.py`](../../agents/llm_react/agent.py); both
 ship — pick one in `submit/agent.py`.
 
 Install the optional `langgraph` extra:
@@ -14,7 +14,7 @@ pip install -e ".[llm]"
 Run the offline demo (uses `MockLLM` when `LLM_API_KEY` is unset):
 
 ```
-python -m agents.langgraph_agent --seed 42 --days 30
+python -m agents.langgraph_agent.agent --seed 42 --days 30
 ```
 
 ## Graph topology
@@ -40,32 +40,32 @@ router after each dispatch instead of being hard-wired in sequence.
 
 | Node | Purpose | API calls | Source |
 |------|---------|-----------|--------|
-| `_observe` | Snapshot the world | `GET /state`, `GET /forecast`, `GET /events`, `GET /reservoirs` | `agents/langgraph_agent.py:182` |
-| `_summarise` | Compress for the LLM | (none — pure) | `agents/langgraph_agent.py:196` |
-| `_plan` | One LLM call; split into action queue + step size | (none — LLM only) | `agents/langgraph_agent.py:213` |
-| `_route_next` | Conditional edge: pick the next dispatch branch | (none) | `agents/langgraph_agent.py:249` |
-| `_make_dispatch_node("build")` | Place a tile | `POST /build` | `agents/langgraph_agent.py:261` |
-| `_make_dispatch_node("demolish")` | Remove a tile | `POST /demolish` | `agents/langgraph_agent.py:261` |
-| `_make_dispatch_node("survey")` | Reveal a voxel column | `POST /survey` | `agents/langgraph_agent.py:261` |
-| `_make_dispatch_node("drill")` | Spawn a well | `POST /drill` | `agents/langgraph_agent.py:261` |
-| `_make_dispatch_node("set_well_rate")` | Throttle a well | `POST /control/well` | `agents/langgraph_agent.py:261` |
-| `_make_dispatch_node("set_refinery_rate")` | Throttle a refinery | `POST /control/refinery` | `agents/langgraph_agent.py:261` |
-| `_step` | Advance the simulation | `POST /step` | `agents/langgraph_agent.py:285` |
-| `_loop` | Conditional edge: `observe` until `day == game_days`, else `END` | (none) | `agents/langgraph_agent.py:297` |
+| `_observe` | Snapshot the world | `GET /state`, `GET /forecast`, `GET /events`, `GET /reservoirs` | `agents/langgraph_agent/agent.py:182` |
+| `_summarise` | Compress for the LLM | (none — pure) | `agents/langgraph_agent/agent.py:196` |
+| `_plan` | One LLM call; split into action queue + step size | (none — LLM only) | `agents/langgraph_agent/agent.py:213` |
+| `_route_next` | Conditional edge: pick the next dispatch branch | (none) | `agents/langgraph_agent/agent.py:249` |
+| `_make_dispatch_node("build")` | Place a tile | `POST /build` | `agents/langgraph_agent/agent.py:261` |
+| `_make_dispatch_node("demolish")` | Remove a tile | `POST /demolish` | `agents/langgraph_agent/agent.py:261` |
+| `_make_dispatch_node("survey")` | Reveal a voxel column | `POST /survey` | `agents/langgraph_agent/agent.py:261` |
+| `_make_dispatch_node("drill")` | Spawn a well | `POST /drill` | `agents/langgraph_agent/agent.py:261` |
+| `_make_dispatch_node("set_well_rate")` | Throttle a well | `POST /control/well` | `agents/langgraph_agent/agent.py:261` |
+| `_make_dispatch_node("set_refinery_rate")` | Throttle a refinery | `POST /control/refinery` | `agents/langgraph_agent/agent.py:261` |
+| `_step` | Advance the simulation | `POST /step` | `agents/langgraph_agent/agent.py:285` |
+| `_loop` | Conditional edge: `observe` until `day == game_days`, else `END` | (none) | `agents/langgraph_agent/agent.py:297` |
 
 Two endpoints are read outside the per-turn loop in `play_game` itself:
 
 - `GET /catalog` — read once at startup so the planner knows the legal
-  tile vocabulary. Source: `agents/langgraph_agent.py:136`.
+  tile vocabulary. Source: `agents/langgraph_agent/agent.py:136`.
 - `GET /score` — read once after the loop ends (returns `None` if no
-  baseline is committed for the seed). Source: `agents/langgraph_agent.py:136`.
+  baseline is committed for the seed). Source: `agents/langgraph_agent/agent.py:136`.
 
 `POST /reset` fires at the top of `play_game` (also `:136`).
 
 ## What each node hands the next
 
 The graph state is the `GraphState` TypedDict at
-`agents/langgraph_agent.py:58`. The contract:
+`agents/langgraph_agent/agent.py:58`. The contract:
 
 - `observe` writes `obs`, `forecast`, `events`, `reservoirs`, `day`.
 - `summarise` reads them and writes `summary` (the LLM prompt body).
@@ -91,6 +91,6 @@ The graph state is the `GraphState` TypedDict at
 ## Scope
 
 This agent is a worked example, not a competitive baseline. The PRD's
->15%-above-scripted target belongs to `agents/llm_react.py`. Use this
+>15%-above-scripted target belongs to `agents/llm_react/agent.py`. Use this
 file when you want to know how a graph-based agent should be wired
 end-to-end against the world.
