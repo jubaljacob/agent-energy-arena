@@ -58,6 +58,7 @@ from world.subsurface import (
     CRUDE_PRICE_USD_PER_BBL,
     INJECTION_KWH_PER_BBL,
     PRESSURE_BOOST_MAX,
+    PRODUCTION_KWH_PER_BBL,
     Q_MAX_WELL_BBL_DAY,
     WELL_SETPOINT_MAX,
     WELL_SETPOINT_MIN,
@@ -741,6 +742,15 @@ class World:
         }
         inj_kwh_today = 0.0  # sum of hourly kW values; kWh delivered to injection.
 
+        # Per-production-well daily kWh delivered (economy-rebalance slice 07).
+        # Mirrors the injection accumulator: each hour the well draws either
+        # baseline_kw (balanced/curtailment) or 0 (brownout/blackout); the
+        # bbl-equivalent of that power becomes the well's daily throughput cap.
+        prod_kwh_today: dict[str, float] = {
+            w.id: 0.0 for w in self.state.wells if w.type == "production"
+        }
+        prod_kwh_total_today = 0.0
+
         for hour in range(self.config.ticks_per_day):
             self.state.hour = hour
             # Each hour: 3 sim_rng draws (cloud, wind speed, wind dir) then
@@ -779,6 +789,27 @@ class World:
                 inj_total_kw += power_kw
             inj_kwh_today += inj_total_kw
 
+            # Production-well power coupling (economy-rebalance slice 07).
+            # Each producer draws `setpoint × PRODUCTION_KWH_PER_BBL / 24 × eff`
+            # at baseline. Under prev_balance brownout/blackout, the well sheds
+            # to 0 kW (and therefore 0 bbl/hr that hour) — mirroring the
+            # injection shed rule. There is no curtailment ramp-up: a producer
+            # cannot lift faster than its setpoint, so curtailment hours run at
+            # baseline. The bbl-equivalent of each hour's allocated power
+            # accumulates into prod_kwh_today; the daily production loop below
+            # caps each well's output at sum_kwh / PRODUCTION_KWH_PER_BBL.
+            prod_total_kw = 0.0
+            prod_hour_kwh: dict[str, float] = {}
+            for pw in self.state.wells:
+                if pw.type != "production":
+                    continue
+                eff = workforce.efficiency(pw)
+                baseline_kw = pw.setpoint_rate_bbl_day * PRODUCTION_KWH_PER_BBL / 24.0 * eff
+                power_kw = 0.0 if prev_balance in ("brownout", "blackout") else baseline_kw
+                prod_hour_kwh[pw.id] = power_kw
+                prod_total_kw += power_kw
+            prod_kwh_total_today += prod_total_kw
+
             # Refinery process load (slice 09): hourly kW = yesterday's actual
             # throughput × KWH_PER_BBL / 24. The 1-day lag mirrors DR injection
             # — actual throughput for day D is only known AFTER the production
@@ -791,7 +822,7 @@ class World:
                 if t.type == "refinery" and t.operational
             )
 
-            demand_kw = civilian_demand_kw + inj_total_kw + refinery_process_load_kw
+            demand_kw = civilian_demand_kw + inj_total_kw + prod_total_kw + refinery_process_load_kw
 
             plants = [t for t in self.state.tiles if t.type in PLANT_TYPES]
             outputs, supply_kw, by_source = dispatch(
@@ -888,6 +919,12 @@ class World:
             for iw_id, (_power_kw, bbl_this_hour) in inj_hour_assignments.items():
                 inj_bbl_today[iw_id] += bbl_this_hour
 
+            # Per-production-well kWh accumulator (slice 07). Summed across 24
+            # hours, dividing by PRODUCTION_KWH_PER_BBL yields the day's
+            # power-allocated bbl budget consumed by the producer loop below.
+            for pw_id, power_kw in prod_hour_kwh.items():
+                prod_kwh_today[pw_id] += power_kw
+
             coal_kwh += by_source["coal"]
             gas_kwh += by_source["gas"]
 
@@ -950,6 +987,8 @@ class World:
             w.cumulative_injected_bbl += bbl
         if inj_kwh_today:
             self.state.today_summary_so_far["injection_kw"] = inj_kwh_today
+        if prod_kwh_total_today:
+            self.state.today_summary_so_far["production_kw"] = prod_kwh_total_today
 
         # Production-well daily output (brief §4.5). Iterates wells in
         # creation order — `state.wells` is appended-to on /drill — which
@@ -992,6 +1031,15 @@ class World:
                 producer_yesterday_rate_bbl_day=well.yesterday_rate_bbl_day,
                 efficiency=workforce.efficiency(well),
             )
+            # Power-throttling cap (slice 07). The hourly loop already summed
+            # this well's allocated power into prod_kwh_today; the equivalent
+            # bbl budget caps today's actual throughput. At balanced/curtailment
+            # the budget equals setpoint × efficiency, so geology remains the
+            # binding constraint. When the grid sheds the well (brownout/
+            # blackout hours), the budget shrinks and pins throughput at
+            # sum_kw / PRODUCTION_KWH_PER_BBL.
+            power_allocated_bbl = prod_kwh_today.get(well.id, 0.0) / PRODUCTION_KWH_PER_BBL
+            q = min(q, power_allocated_bbl)
             well.current_rate_bbl_day = q
             well.cumulative_produced_bbl += q
 

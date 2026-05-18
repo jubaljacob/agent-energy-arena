@@ -61,6 +61,14 @@ WELL_SETPOINT_MAX: float = Q_MAX_WELL_BBL_DAY
 INJECTION_KWH_PER_BBL: float = 50.0
 PRESSURE_BOOST_MAX: float = 0.5
 
+# Production wells (economy-rebalance slice 07). Symmetric to injection's
+# kWh/bbl coupling but at a smaller magnitude — producers do less lifting
+# work per barrel than injectors do compressing water. Consumed by both
+# `world.pricing.well_production_kwh_per_day` (informational popup) and the
+# hourly throttling block in `world.sim` that caps actual rate at
+# power_kw / PRODUCTION_KWH_PER_BBL when the grid is under-supplied.
+PRODUCTION_KWH_PER_BBL: float = 15.0
+
 
 @dataclass
 class Voxel:

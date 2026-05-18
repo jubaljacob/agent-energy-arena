@@ -22,7 +22,7 @@ from world.economy import (
     REFINERY_YIELD,
 )
 from world.power import PLANT_TYPES
-from world.subsurface import INJECTION_KWH_PER_BBL
+from world.subsurface import INJECTION_KWH_PER_BBL, PRODUCTION_KWH_PER_BBL
 
 if TYPE_CHECKING:
     from world.catalog import TileSpec
@@ -224,6 +224,19 @@ def well_injection_kwh_per_day(well: Well) -> float:
     if well.type != "injection":
         return 0.0
     return well.current_rate_bbl_day * INJECTION_KWH_PER_BBL
+
+
+def well_production_kwh_per_day(well: Well) -> float:
+    """Daily kWh consumed by one production well at its current lift rate.
+
+    Returns ``current_rate_bbl_day × PRODUCTION_KWH_PER_BBL``. Injection wells
+    return 0. Symmetric to :func:`well_injection_kwh_per_day`; the cost is
+    internalized through dispatch (the player isn't billed $ for it), but the
+    figure is useful in the popup to gauge the operational power draw.
+    """
+    if well.type != "production":
+        return 0.0
+    return well.current_rate_bbl_day * PRODUCTION_KWH_PER_BBL
 
 
 def _commercial_residents_in_radius(state: WorldState, tile: Tile) -> float:

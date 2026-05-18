@@ -387,6 +387,10 @@ def test_surplus_crude_after_refinery_setpoint_satisfied():
     w = World()
     w.reset(seed=42)
     th = next(t for t in w.state.tiles if t.type == "town_hall")
+    # Production wells now draw power (slice 07); supply some so the
+    # producer isn't shed to 0 bbl/hr by hour 1's brownout.
+    w.state.treasury = 10_000_000.0
+    w.build("coal_plant", th.x - 1, th.y)
     w.build("refinery", th.x + 1, th.y)
     rid = next(t.id for t in w.state.tiles if t.type == "refinery")
     w.control_refinery(rid, 10.0)

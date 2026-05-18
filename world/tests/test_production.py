@@ -15,6 +15,7 @@ from world.sim import World
 from world.subsurface import (
     CRUDE_PRICE_USD_PER_BBL,
     PERM_NORMALIZATION_MD,
+    PRODUCTION_KWH_PER_BBL,
     Q_MAX_WELL_BBL_DAY,
     SubsurfaceGrid,
     Voxel,
@@ -667,6 +668,219 @@ def test_setpoint_not_auto_clamped_by_well_efficiency():
     fully_staffed.control_well(fully_staffed.state.wells[0].id, Q_MAX_WELL_BBL_DAY)
     fully_staffed.step(days=1)
     assert well.current_rate_bbl_day < fully_staffed.state.wells[0].current_rate_bbl_day
+
+
+# -- Power coupling (economy-rebalance slice 07) ---------------------------
+#
+# Symmetric to the injection-well DR throttling: a production well draws
+# `setpoint × PRODUCTION_KWH_PER_BBL / 24 × efficiency` per hour at the
+# previous hour's balanced state and 0 kW under brownout/blackout. The
+# day's actual throughput is capped at sum_kwh / PRODUCTION_KWH_PER_BBL.
+
+
+def test_production_baseline_when_grid_balanced_full_day():
+    """With ample power, a producer's daily output equals its geology-bound
+    setpoint potential — power throttling never binds at full supply. The
+    test pins this by asserting (a) the grid never tipped into brownout/
+    blackout and (b) the day's power_kw aggregate matches the full-day
+    baseline at the well's post-step efficiency, which means the throttling
+    cap was sum_kwh / KWH = setpoint × eff — high enough not to bind on
+    the seed-42 voxel's modest geology."""
+    from world import workforce as _workforce
+
+    w = World()
+    w.reset(seed=42)
+    w.state.treasury = 10_000_000.0
+    th = next(t for t in w.state.tiles if t.type == "town_hall")
+    # Two coal plants give ~3000 kW of supply vs ~30 kW civilian + ~125 kW
+    # producer power. Plenty of headroom keeps the grid balanced/curtailment
+    # for every hour.
+    _build_road_to(w, th.x + 2, th.y)
+    w.build("coal_plant", th.x + 2, th.y)
+    _build_road_to(w, th.x + 3, th.y)
+    w.build("coal_plant", th.x + 3, th.y)
+    hc = _hc_voxel(w)
+    w.drill(hc.x, hc.y, hc.z, "production")
+    well = w.state.wells[0]
+    w.control_well(well.id, Q_MAX_WELL_BBL_DAY)
+    w.step(days=1)
+    eff = _workforce.efficiency(well)
+    # Grid stayed off-brownout/off-blackout, so all 24 hours allocated
+    # baseline power. Daily kWh = setpoint × KWH × eff.
+    expected_daily_kwh = Q_MAX_WELL_BBL_DAY * PRODUCTION_KWH_PER_BBL * eff
+    assert w.state.today_summary_so_far["production_kw"] == pytest.approx(expected_daily_kwh)
+    # Power budget (kWh / KWH) = setpoint × eff ≫ seed-42 geology cap, so
+    # throughput is geology-bound and strictly less than the setpoint.
+    assert 0.0 < well.current_rate_bbl_day < Q_MAX_WELL_BBL_DAY * eff
+
+
+def test_production_sheds_when_prev_balance_brownout():
+    """Pre-set prev_balance to brownout. Hour 0 produces 0 bbl. With no power
+    plants, dispatch stays in brownout/blackout for the rest of the day, so
+    cumulative_produced_bbl ends at 0."""
+    w = World()
+    w.reset(seed=42)
+    w.state.power_now["balance_state"] = "brownout"
+    hc = _hc_voxel(w)
+    w.drill(hc.x, hc.y, hc.z, "production")
+    w.control_well(w.state.wells[0].id, Q_MAX_WELL_BBL_DAY)
+    w.step(days=1)
+    well = w.state.wells[0]
+    assert well.cumulative_produced_bbl == 0.0
+    assert well.current_rate_bbl_day == 0.0
+    assert w.state.today_summary_so_far["production_kw"] == 0.0
+
+
+def test_production_sheds_when_prev_balance_blackout():
+    w = World()
+    w.reset(seed=42)
+    w.state.power_now["balance_state"] = "blackout"
+    hc = _hc_voxel(w)
+    w.drill(hc.x, hc.y, hc.z, "production")
+    w.control_well(w.state.wells[0].id, Q_MAX_WELL_BBL_DAY)
+    w.step(days=1)
+    well = w.state.wells[0]
+    assert well.cumulative_produced_bbl == 0.0
+
+
+def test_undersupplied_throughput_equals_power_over_kwh_per_bbl():
+    """Fresh world (no plants) starts hour 0 at prev_balance=balanced, so the
+    producer attempts its baseline draw — but supply is 0, dispatch tips into
+    blackout that hour, and the producer sheds for hours 1..23. The single
+    hour of allocated power is `setpoint × KWH / 24`, so the day's bbl =
+    that power / KWH = setpoint / 24."""
+    w = World()
+    w.reset(seed=42)
+    # No power plants. prev_balance defaults to "balanced" on a fresh world.
+    hc = _hc_voxel(w)
+    w.drill(hc.x, hc.y, hc.z, "production")
+    setpoint = 200.0
+    w.control_well(w.state.wells[0].id, setpoint)
+    w.step(days=1)
+    well = w.state.wells[0]
+    # Single hour of baseline draw: power_kw = setpoint × KWH / 24.
+    expected_hour_0_kw = setpoint * PRODUCTION_KWH_PER_BBL / 24.0
+    expected_hour_0_bbl = expected_hour_0_kw / PRODUCTION_KWH_PER_BBL  # = setpoint/24
+    assert well.current_rate_bbl_day == pytest.approx(expected_hour_0_bbl)
+    # Daily production_kw aggregate reflects the single allocated hour.
+    assert w.state.today_summary_so_far["production_kw"] == pytest.approx(expected_hour_0_kw)
+
+
+def test_full_supply_runs_at_setpoint_when_geology_unbounded():
+    """A synthetic super-rich pool puts geology potential at exactly
+    Q_MAX_WELL_BBL_DAY; with full power supply, the daily rate hits the
+    setpoint."""
+    w = World()
+    w.reset(seed=42)
+    w.state.treasury = 10_000_000.0
+    th = next(t for t in w.state.tiles if t.type == "town_hall")
+    _build_road_to(w, th.x + 2, th.y)
+    w.build("coal_plant", th.x + 2, th.y)
+
+    # Find an empty 3×3×3 voxel pool and pack it with high-perm oil so the
+    # geological cap > setpoint, making power throttling the only possible
+    # binding constraint (and not binding at full supply).
+    target = None
+    for x in range(2, 30, 4):
+        for y in range(2, 30, 4):
+            for z in range(2, 14, 2):
+                pool, _ = voxels_in_3x3x3(w.subsurface, x, y, z)
+                if not pool:
+                    target = (x, y, z)
+                    break
+            if target:
+                break
+        if target:
+            break
+    assert target is not None
+    # Pack one HC voxel with enough perm that k_eff (= perm / 27 / 500) ≫ 1.
+    # 27 × 500 × 10 = 135_000 → k_eff = 10, so q_potential = Q_MAX × 10
+    # which the setpoint clamps back to Q_MAX. Plenty of oil so fraction = 1.
+    w.subsurface.voxels[target] = Voxel(
+        x=target[0],
+        y=target[1],
+        z=target[2],
+        porosity=0.3,
+        permeability=135_000.0,
+        oil_saturation=0.8,
+        oil_in_place_bbl=10_000_000.0,
+        oil_remaining_bbl=10_000_000.0,
+    )
+    res = w.drill(target[0], target[1], target[2], "production")
+    assert res["ok"] is True
+    well_id = res["result"]["id"]
+    w.control_well(well_id, Q_MAX_WELL_BBL_DAY)
+    w.step(days=1)
+    well = next(ww for ww in w.state.wells if ww.id == well_id)
+    # All 24 hours of baseline draw → power_allocated = setpoint × KWH;
+    # geology cap >> setpoint, so q_actual = setpoint.
+    assert well.current_rate_bbl_day == pytest.approx(Q_MAX_WELL_BBL_DAY)
+
+
+def test_production_power_demand_appears_in_hourly_demand():
+    """The hourly demand_kw consumed by dispatch includes the producer's
+    baseline power. With a single producer at setpoint 200, baseline_kw =
+    200 × 15 / 24 = 125 kW. The day-1 dispatch.last_day_demand_kw_by_hour
+    trace reflects this addition."""
+    w = World()
+    w.reset(seed=42)
+    w.state.population = 0  # zero civilian demand to isolate producer draw
+    w.state.treasury = 10_000_000.0
+    th = next(t for t in w.state.tiles if t.type == "town_hall")
+    _build_road_to(w, th.x + 2, th.y)
+    w.build("coal_plant", th.x + 2, th.y)
+    coal = next(t for t in w.state.tiles if t.type == "coal_plant")
+    coal.staffed_jobs = coal.jobs
+    hc = _hc_voxel(w)
+    w.drill(hc.x, hc.y, hc.z, "production")
+    well = w.state.wells[0]
+    well.staffed_jobs = 3  # oil_well jobs=3; force-staff under pop=0
+    setpoint = 200.0
+    w.control_well(well.id, setpoint)
+    w.step(days=1)
+    # Hour 0 demand_kw should include the producer's baseline (well at full
+    # efficiency draws setpoint × KWH / 24 kW).
+    baseline_kw = setpoint * PRODUCTION_KWH_PER_BBL / 24.0
+    assert w.state.last_day_demand_kw_by_hour[0] >= baseline_kw - 1e-6
+    # Total daily kWh equals 24 × baseline (every hour stayed off-shed).
+    assert w.state.today_summary_so_far["production_kw"] == pytest.approx(24.0 * baseline_kw)
+
+
+def test_half_staffed_producer_baseline_halves():
+    """At balanced, a producer's hourly draw scales with workforce
+    efficiency: setpoint × KWH / 24 × efficiency. Half-staffed cuts both
+    the power draw and the throughput cap in half."""
+    w = World()
+    w.reset(seed=42)
+    w.state.population = 0
+    w.state.treasury = 10_000_000.0
+    th = next(t for t in w.state.tiles if t.type == "town_hall")
+    _build_road_to(w, th.x + 2, th.y)
+    w.build("coal_plant", th.x + 2, th.y)
+    coal = next(t for t in w.state.tiles if t.type == "coal_plant")
+    coal.staffed_jobs = coal.jobs
+    hc = _hc_voxel(w)
+    w.drill(hc.x, hc.y, hc.z, "production")
+    well = w.state.wells[0]
+    setpoint = 100.0
+    w.control_well(well.id, setpoint)
+    # oil_well jobs=3 (catalog). Half-staff = 1 → efficiency = 1/3.
+    half_jobs = 1
+    full_jobs = 3
+    well.staffed_jobs = half_jobs
+    eff = half_jobs / full_jobs
+    w.step(days=1)
+    # production_kw aggregate must reflect efficiency scaling. With grid
+    # balanced for all 24 hours, total kWh = setpoint × KWH × efficiency.
+    expected_total_kwh = setpoint * PRODUCTION_KWH_PER_BBL * eff
+    assert w.state.today_summary_so_far["production_kw"] == pytest.approx(expected_total_kwh)
+
+
+def test_injection_kwh_per_bbl_unchanged_by_slice_07():
+    """Symmetric ACs require the injection-side constant to be untouched."""
+    from world.subsurface import INJECTION_KWH_PER_BBL
+
+    assert INJECTION_KWH_PER_BBL == 50.0
 
 
 def test_catalog_exposes_well_specs():

@@ -1324,6 +1324,37 @@ def test_well_injection_kwh_zero_for_production_well() -> None:
     assert well_injection_kwh_per_day(well) == 0.0
 
 
+# -- well_production_kwh_per_day unit --------------------------------------
+
+
+def test_well_production_kwh_scales_with_rate() -> None:
+    from world.pricing import well_production_kwh_per_day
+    from world.subsurface import PRODUCTION_KWH_PER_BBL
+
+    well = _production_well(rate=120.0)
+    assert well_production_kwh_per_day(well) == pytest.approx(120.0 * PRODUCTION_KWH_PER_BBL)
+
+
+def test_well_production_kwh_zero_when_rate_zero() -> None:
+    from world.pricing import well_production_kwh_per_day
+
+    assert well_production_kwh_per_day(_production_well(rate=0.0)) == 0.0
+
+
+def test_well_production_kwh_zero_for_injection_well() -> None:
+    from world.pricing import well_production_kwh_per_day
+
+    well = _injection_well(rate=200.0)
+    assert well_production_kwh_per_day(well) == 0.0
+
+
+def test_production_kwh_per_bbl_is_15() -> None:
+    """Pin the constant so a regression that walks it back trips here."""
+    from world.subsurface import PRODUCTION_KWH_PER_BBL
+
+    assert PRODUCTION_KWH_PER_BBL == 15.0
+
+
 # -- integration: state_dict well fields -----------------------------------
 
 
