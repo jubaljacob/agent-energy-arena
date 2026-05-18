@@ -107,10 +107,13 @@ def test_system_prompt_covers_oilfield_v2_mechanics() -> None:
 
 def test_system_prompt_does_not_advertise_old_mechanics() -> None:
     """Primer must not reference the retired cumulative-injection
-    pressure formula or the flat (size/8) survey cost."""
+    pressure formula or the flat (size/8) survey cost. Match the
+    formula signature (`inj_total / V_init`), not the field name —
+    `cumulative_injected_bbl` is a live per-well telemetry counter
+    and legitimately appears in the appended RULES.md."""
     p = SYSTEM_PROMPT
     assert "(size/8)" not in p
-    assert "cumulative_injected" not in p
+    assert "inj_total / V_init" not in p
     assert "cumulative-injection" not in p
 
 

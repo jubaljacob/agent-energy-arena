@@ -171,7 +171,8 @@ def test_openai_chat_raises_on_http_error() -> None:
 
 def test_anthropic_chat_sends_messages_payload() -> None:
     """AnthropicLLM POSTs to /messages with system promoted out of the
-    `messages` array and tools using `input_schema` (not `parameters`)."""
+    `messages` array (as a cache-controlled text block) and tools using
+    `input_schema` (not `parameters`)."""
     stub = _StubHTTPX(
         _StubResponse(
             200,
@@ -198,7 +199,12 @@ def test_anthropic_chat_sends_messages_payload() -> None:
     body = stub.last_json
     assert body is not None
     assert body["model"] == "claude-test"
-    assert body["system"] == "sys"
+    # System ships as a cache-controlled text block so Anthropic caches
+    # the static prefix (tools + system) for ~5 minutes; subsequent /step
+    # calls hit the cache instead of re-paying for the 7k-token prefix.
+    assert body["system"] == [
+        {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}
+    ]
     assert body["messages"] == [{"role": "user", "content": "usr"}]
     assert "input_schema" in body["tools"][0]
     assert "parameters" not in body["tools"][0]
@@ -206,6 +212,36 @@ def test_anthropic_chat_sends_messages_payload() -> None:
     assert resp.tool_calls == [ToolCall(name="survey", arguments={"x": 16, "y": 16, "size": 8})]
     assert resp.text == "thinking..."
     assert resp.usage == Usage(input_tokens=200, output_tokens=24)
+
+
+def test_anthropic_chat_records_prompt_cache_stats_in_usage() -> None:
+    """Second-and-later /step calls hit the cache: Anthropic returns
+    `cache_read_input_tokens` and the Usage dataclass surfaces it so
+    the agent's cumulative-token counter can see how much was cached."""
+    stub = _StubHTTPX(
+        _StubResponse(
+            200,
+            {
+                "content": [{"type": "text", "text": ""}],
+                "usage": {
+                    "input_tokens": 80,
+                    "output_tokens": 12,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 7400,
+                },
+            },
+        )
+    )
+    llm = AnthropicLLM.__new__(AnthropicLLM)
+    llm.model = "claude-test"
+    llm._client = stub
+    resp = llm.chat(system="sys", user="usr", tools=[_toy_tool()])
+    assert resp.usage.input_tokens == 80
+    assert resp.usage.cache_read_input_tokens == 7400
+    assert resp.usage.cache_creation_input_tokens == 0
+    # `total` includes cache reads so the 1M-token budget stays
+    # honest across cached and uncached calls.
+    assert resp.usage.total == 80 + 12 + 7400
 
 
 def test_anthropic_chat_raises_on_http_error() -> None:

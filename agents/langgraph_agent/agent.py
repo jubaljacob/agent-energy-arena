@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from agents.api_client import ApiClient
+from agents.attach_runtime import drive_one_turn
 from agents.base import BaseAgent
 from agents.llm import LLMClient, LLMResponse, MockLLM, ToolCall, Usage, make_llm_from_env
 from agents.prompts import ACTION_TOOLS, SYSTEM_PROMPT
@@ -79,12 +80,11 @@ class LangGraphAgent(BaseAgent):
     """Graph-based reference agent. Implements the `Agent` protocol
     (`__init__(api, *, seed=None)` + `play_game() -> dict`).
 
-    Subclasses `BaseAgent` so the Agent Play attach handler accepts it,
-    but overrides `play_game()` entirely — the per-turn `act(state)`
-    hook is the no-op inherited default. Agent Play attach therefore
-    loads the class without errors but the agent contributes nothing
-    per `/step`; use the CLI (`python -m agents.langgraph_agent.agent`)
-    for a full game run.
+    Subclasses `BaseAgent` so the Agent Play attach handler accepts it.
+    The graph itself only runs in CLI mode (`play_game()`), but
+    `act(state)` is overridden to lay a deterministic day-0 prime when
+    the agent is attached via the UI — without it, attached agents are
+    silent per `/step` because the LLM-driven graph never runs.
     """
 
     def __init__(
@@ -108,6 +108,28 @@ class LangGraphAgent(BaseAgent):
         self.catalog: dict[str, Any] | None = None
         self.final_score: dict[str, Any] | None = None
         self.graph = self._build_graph()
+
+    # -- Attach hook ------------------------------------------------------
+
+    def act(self, state: dict[str, Any]) -> None:
+        """Per-`/step` hook used in Agent Play attach mode.
+
+        The graph runs in CLI mode only — its `observe → summarise →
+        plan → dispatch → step → loop` cycle assumes the agent owns
+        the clock. Attach mode skips the graph and runs the same one-
+        LLM-call-per-turn loop as `LLMReactAgent.act`: ask the model
+        what to do, dispatch every non-`step` tool call, let the
+        human's `/step` handler advance the clock.
+        """
+        usage = drive_one_turn(
+            self.api,
+            state,
+            self.llm,
+            system_prompt=self.system_prompt,
+            action_tools=self.action_tools,
+            max_tokens=self.max_tokens_per_turn,
+        )
+        self.cumulative_tokens += usage.total
 
     # -- Graph construction ----------------------------------------------
 

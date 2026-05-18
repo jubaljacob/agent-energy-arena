@@ -39,14 +39,29 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class Usage:
-    """Per-call token usage. Vendors report this on every response."""
+    """Per-call token usage. Vendors report this on every response.
+
+    `cache_creation_input_tokens` and `cache_read_input_tokens` are
+    Anthropic-only — they default to 0 for vendors that don't surface
+    prompt-cache stats. `input_tokens` is the count of *non-cached*
+    input tokens (Anthropic returns cached-prefix tokens separately);
+    `total` sums everything that hit the wire so a 1M-token budget
+    stays meaningful across cached and uncached calls.
+    """
 
     input_tokens: int
     output_tokens: int
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
     @property
     def total(self) -> int:
-        return self.input_tokens + self.output_tokens
+        return (
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_creation_input_tokens
+            + self.cache_read_input_tokens
+        )
 
 
 @dataclass(frozen=True)
@@ -196,10 +211,33 @@ class AnthropicLLM:
         tools: list[dict[str, Any]],
         max_tokens: int = 2048,
     ) -> LLMResponse:
+        """Anthropic Messages call with prompt caching.
+
+        The reference agent's static prefix — `SYSTEM_PROMPT` (≈7k
+        tokens once `RULES.md` is appended) plus the 7-tool schema
+        (~700 tokens) — is the dominant input cost. We mark the
+        system block with `cache_control: ephemeral` so Anthropic
+        caches it (and everything earlier in the request, i.e. the
+        tools array) for ~5 minutes. The first attach-mode `/step`
+        writes the cache; subsequent `/step`s read it back at ~10%
+        of the input cost and a fraction of the wall-clock latency.
+
+        This is what "context initialized at attach time, called
+        every day" means in a stateless-API world: the static prefix
+        is processed once, the per-day delta (`user`, the freshly
+        summarised state) is the only thing the model has to chew
+        through on the hot path.
+        """
         body = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "system": system,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             "messages": [{"role": "user", "content": user}],
             "tools": [_anthropic_tool_schema(t) for t in tools],
         }
@@ -224,6 +262,8 @@ class AnthropicLLM:
         usage = Usage(
             input_tokens=int(usage_payload.get("input_tokens", 0)),
             output_tokens=int(usage_payload.get("output_tokens", 0)),
+            cache_creation_input_tokens=int(usage_payload.get("cache_creation_input_tokens", 0)),
+            cache_read_input_tokens=int(usage_payload.get("cache_read_input_tokens", 0)),
         )
         return LLMResponse(tool_calls=tool_calls, text="".join(text_parts), usage=usage)
 

@@ -17,10 +17,10 @@ from world.pricing import (
     COMMERCIAL_RADIUS,
     COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY,
     INDUSTRIAL_REVENUE_PER_DAY,
-    _occupancy_ratio,
     commercial_revenue_for_tile,
     industrial_co2_for_tile,
     industrial_revenue_for_tile,
+    occupancy_ratio,
     update_civic_revenue,
 )
 from world.sim import World
@@ -422,34 +422,34 @@ def _state_with(tiles: list[Tile], population: int) -> WorldState:
     return s
 
 
-# -- _occupancy_ratio ------------------------------------------------------
+# -- occupancy_ratio ------------------------------------------------------
 
 
 def test_occupancy_ratio_full_house_full_pop() -> None:
     state = _state_with([_house_tile(0, 0, 100)], population=100)
-    assert _occupancy_ratio(state) == pytest.approx(1.0)
+    assert occupancy_ratio(state) == pytest.approx(1.0)
 
 
 def test_occupancy_ratio_clipped_at_one() -> None:
     state = _state_with([_house_tile(0, 0, 50)], population=100)
-    assert _occupancy_ratio(state) == pytest.approx(1.0)
+    assert occupancy_ratio(state) == pytest.approx(1.0)
 
 
 def test_occupancy_ratio_half_pop_full_house() -> None:
     state = _state_with([_house_tile(0, 0, 100)], population=50)
-    assert _occupancy_ratio(state) == pytest.approx(0.5)
+    assert occupancy_ratio(state) == pytest.approx(0.5)
 
 
 def test_occupancy_ratio_no_pop_no_housing_returns_zero() -> None:
     state = _state_with([], population=0)
-    assert _occupancy_ratio(state) == pytest.approx(0.0)
+    assert occupancy_ratio(state) == pytest.approx(0.0)
 
 
 def test_occupancy_ratio_no_housing_with_pop_clamps_to_one() -> None:
     # Per spec: ``min(1.0, pop / max(1, capacity))``. With no housing and
     # nonzero pop, ``max(1, 0) == 1`` so the ratio saturates at 1.0.
     state = _state_with([], population=10)
-    assert _occupancy_ratio(state) == pytest.approx(1.0)
+    assert occupancy_ratio(state) == pytest.approx(1.0)
 
 
 # -- commercial_revenue_for_tile ------------------------------------------

@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from agents.api_client import ApiClient
+from agents.attach_runtime import drive_one_turn
 from agents.base import BaseAgent
 from agents.llm import LLMClient, ToolCall, make_llm_from_env
 from agents.prompts import ACTION_TOOLS, SYSTEM_PROMPT
@@ -75,6 +76,41 @@ class LLMReactAgent(BaseAgent):
         self._warned_budget: bool = False
         self._stderr = stderr if stderr is not None else sys.stderr
 
+    # -- Attach hook ------------------------------------------------------
+
+    def act(self, state: dict[str, Any]) -> None:
+        """Per-`/step` hook used when the agent is attached via Agent Play.
+
+        One LLM call per turn: summarise the world, ask the model,
+        dispatch every non-`step` tool call. The surrounding `/step`
+        handler advances the clock once this returns. The
+        cumulative-token counter and the 80%-of-1M budget warning
+        carry over from CLI mode — attach mode shares the same budget
+        envelope, just spread across UI turns instead of `decide()`
+        calls.
+        """
+        usage = drive_one_turn(
+            self.api,
+            state,
+            self.llm,
+            system_prompt=self.system_prompt,
+            action_tools=self.action_tools,
+            max_tokens=self.max_tokens_per_turn,
+        )
+        self._record_usage(usage.total)
+
+    def _record_usage(self, tokens: int) -> None:
+        """Shared token-accounting tail used by both `decide` (CLI) and
+        `act` (attach). Fires the 80%-of-budget warning at most once."""
+        self.cumulative_tokens += tokens
+        if self.cumulative_tokens >= TOKEN_WARN_THRESHOLD and not self._warned_budget:
+            self._warned_budget = True
+            print(
+                f"WARNING: cumulative LLM tokens {self.cumulative_tokens:,} "
+                f"exceeded 80% of {TOKEN_BUDGET:,} budget",
+                file=self._stderr,
+            )
+
     # -- Main loop --------------------------------------------------------
 
     def play_game(self) -> dict[str, Any]:
@@ -115,15 +151,7 @@ class LLMReactAgent(BaseAgent):
             tools=self.action_tools,
             max_tokens=self.max_tokens_per_turn,
         )
-        # Token accounting. Warn once when crossing the threshold.
-        self.cumulative_tokens += response.usage.total
-        if self.cumulative_tokens >= TOKEN_WARN_THRESHOLD and not self._warned_budget:
-            self._warned_budget = True
-            print(
-                f"WARNING: cumulative LLM tokens {self.cumulative_tokens:,} "
-                f"exceeded 80% of {TOKEN_BUDGET:,} budget",
-                file=self._stderr,
-            )
+        self._record_usage(response.usage.total)
 
         remaining_days = game_days - int(state["day"])
         return self._dispatch_calls(response.tool_calls, remaining_days)

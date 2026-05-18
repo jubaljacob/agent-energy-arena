@@ -54,6 +54,7 @@ from world.pricing import (
 from world.recorder import Recorder
 from world.scenario import NullScenario, Scenario
 from world.state import Tile, Well, WorldState
+from world.state_view import tile_view, well_view
 from world.subsurface import (
     CRUDE_PRICE_USD_PER_BBL,
     INJECTION_KWH_PER_BBL,
@@ -88,128 +89,6 @@ from world.workforce import employed as workforce_employed
 from world.workforce import hire_to_fill
 from world.workforce import total_jobs as workforce_total_jobs
 from world.workforce import unemployed as workforce_unemployed
-
-
-def _tile_to_dict(t: Tile, world: World) -> dict[str, Any]:
-    from world.catalog import TILE_CATALOG
-    from world.pricing import (
-        _commercial_residents_in_radius,
-        commercial_revenue_for_tile,
-        industrial_co2_for_tile,
-        industrial_revenue_for_tile,
-        plant_carbon_cost_for_tile,
-        plant_co2_for_tile,
-        plant_fuel_cost_for_tile,
-        plant_revenue_for_tile,
-        refinery_carbon_cost_for_tile,
-        refinery_co2_for_tile,
-        refinery_revenue_for_tile,
-    )
-
-    # Slice 01 surfaced industrial economics; slice 02 adds commercial; slice
-    # 03 adds plants (solar/wind/coal/gas) with kwh-served-based revenue;
-    # slice 04 adds the fuel + carbon cost rows for fossil plants and folds
-    # them into Net, so the displayed Net now reconciles with the row math.
-    extra: dict[str, Any] = {}
-    fuel_cost = 0.0
-    if t.type == "industrial":
-        revenue = industrial_revenue_for_tile(world.state, t)
-        co2_t = industrial_co2_for_tile(t)
-        carbon_cost = co2_t * world.state.carbon_price
-        net = revenue - t.opex_per_day - carbon_cost
-    elif t.type == "commercial":
-        revenue = commercial_revenue_for_tile(world.state, t)
-        co2_t = 0.0
-        carbon_cost = 0.0
-        net = revenue - t.opex_per_day
-        extra["residents_in_radius"] = _commercial_residents_in_radius(world.state, t)
-    elif t.type in PLANT_TYPES:
-        spec = TILE_CATALOG[t.type]
-        revenue = plant_revenue_for_tile(world.state, t)
-        co2_t = plant_co2_for_tile(t, spec)
-        fuel_cost = plant_fuel_cost_for_tile(world.state, t, spec)
-        carbon_cost = plant_carbon_cost_for_tile(world.state, t, spec)
-        net = revenue - t.opex_per_day - fuel_cost - carbon_cost
-    elif t.type == "refinery":
-        revenue = refinery_revenue_for_tile(world.state, t)
-        co2_t = refinery_co2_for_tile(t)
-        carbon_cost = refinery_carbon_cost_for_tile(world.state, t)
-        net = revenue - t.opex_per_day - carbon_cost
-    else:
-        revenue = 0.0
-        co2_t = 0.0
-        carbon_cost = 0.0
-        net = 0.0
-    return {
-        "id": t.id,
-        "type": t.type,
-        "x": t.x,
-        "y": t.y,
-        "built_day": t.built_day,
-        "operational": t.operational,
-        "capex_paid": t.capex_paid,
-        "opex_per_day": t.opex_per_day,
-        "housing_capacity": t.housing_capacity,
-        "jobs": t.jobs,
-        "demand_kw": t.demand_kw,
-        "staffed_jobs": t.staffed_jobs,
-        "current_output_kw": t.current_output_kw,
-        "kwh_served_today": t.kwh_served_today,
-        "kwh_served_yesterday": t.kwh_served_yesterday,
-        "setpoint_rate_bbl_day": t.setpoint_rate_bbl_day,
-        "current_throughput_bbl_day": t.current_throughput_bbl_day,
-        "estimated_revenue_per_day": revenue,
-        "estimated_co2_per_day": co2_t,
-        "estimated_fuel_cost_per_day": fuel_cost,
-        "estimated_carbon_cost_per_day": carbon_cost,
-        "estimated_net_per_day": net,
-        **extra,
-        **(
-            {"soc_kwh": t.soc_kwh, "charge_setpoint_kw": t.charge_setpoint_kw}
-            if t.type == "battery"
-            else {}
-        ),
-    }
-
-
-def _well_to_dict(w: Well, world: World) -> dict[str, Any]:
-    from world.pricing import (
-        well_gross_crude_value_for_tile,
-        well_injection_kwh_per_day,
-    )
-
-    revenue = well_gross_crude_value_for_tile(world.state, w)
-    injection_kwh = well_injection_kwh_per_day(w)
-    # Injection wells: power cost is internalized through plants, so Net is
-    # -opex with no $-cost from kWh consumption.
-    net = revenue - w.opex_per_day if w.type == "production" else -w.opex_per_day
-    # wells-reservoir-rollup #02: surface the same-reservoir + Chebyshev > 1
-    # gate that `_advance_one_day` uses for `pressure_boost`. Producers carry
-    # `[]` for type symmetry; UI ignores the field on producer rows.
-    supports: list[str] = injector_supports(w, world.state.wells) if w.type == "injection" else []
-    return {
-        "id": w.id,
-        "type": w.type,
-        "x": w.x,
-        "y": w.y,
-        "target_z": w.target_z,
-        "reservoir_id": w.reservoir_id,
-        "drilled_day": w.drilled_day,
-        "setpoint_rate_bbl_day": w.setpoint_rate_bbl_day,
-        "current_rate_bbl_day": w.current_rate_bbl_day,
-        "yesterday_rate_bbl_day": w.yesterday_rate_bbl_day,
-        "yesterday_inj_rate_bbl_day": w.yesterday_inj_rate_bbl_day,
-        "pressure_boost": w.pressure_boost,
-        "cumulative_produced_bbl": w.cumulative_produced_bbl,
-        "cumulative_injected_bbl": w.cumulative_injected_bbl,
-        "capex_paid": w.capex_paid,
-        "opex_per_day": w.opex_per_day,
-        "staffed_jobs": w.staffed_jobs,
-        "supports_producer_ids": supports,
-        "estimated_revenue_per_day": revenue,
-        "injection_power_kwh_per_day": injection_kwh,
-        "estimated_net_per_day": net,
-    }
 
 
 def _scenario_dotted_path(scenario: Scenario, override: str | None = None) -> str | None:
@@ -445,7 +324,7 @@ class World:
         return {
             "ok": True,
             "treasury_after": self.state.treasury,
-            "result": _tile_to_dict(tile, self),
+            "result": tile_view(tile, self),
         }
 
     def demolish(self, x: int, y: int) -> dict[str, Any]:
@@ -589,7 +468,7 @@ class World:
         return {
             "ok": True,
             "treasury_after": self.state.treasury,
-            "result": _well_to_dict(well, self),
+            "result": well_view(well, self),
         }
 
     def control_well(self, well_id: str, rate_bbl_day: float) -> dict[str, Any]:
@@ -1016,7 +895,7 @@ class World:
         # sit at Chebyshev distance > 1 from the producer's target (no
         # breakthrough). The qualification gate is owned by the
         # `injector_supports` helper (wells-reservoir-rollup #02) so this
-        # loop and `_well_to_dict` use the same source of truth. Yesterday's
+        # loop and `well_view` use the same source of truth. Yesterday's
         # rates were snapshotted at the top of this method.
         qualifying_injectors_by_prod: dict[str, list[Well]] = {}
         for iw in self.state.wells:
@@ -1229,8 +1108,8 @@ class World:
                 "ui_play_ms": c.ui_play_ms,
                 "ui_fast_play_ms": c.ui_fast_play_ms,
             },
-            "tiles": [_tile_to_dict(t, self) for t in s.tiles],
-            "wells": [_well_to_dict(w, self) for w in s.wells],
+            "tiles": [tile_view(t, self) for t in s.tiles],
+            "wells": [well_view(w, self) for w in s.wells],
             "reservoirs_revealed": reservoirs_voxel_summary(self.subsurface, top_k=10),
             "reservoirs_summary": reservoirs_summary(self.subsurface, s.wells),
             "active_events": list(s.active_events),

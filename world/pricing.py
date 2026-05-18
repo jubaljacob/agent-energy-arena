@@ -77,13 +77,17 @@ def industrial_co2_for_tile(tile: Tile) -> float:
     return INDUSTRIAL_PROCESS_CO2_T_PER_DAY * workforce.efficiency(tile)
 
 
-def _occupancy_ratio(state: WorldState) -> float:
+def occupancy_ratio(state: WorldState) -> float:
     """City-wide occupancy = ``min(1.0, population / total_housing_capacity)``.
 
     Returns 0.0 when there is no housing (zero population in a city with no
     homes still ends up at 0/1 = 0). The cap at 1.0 means a temporary
     overshoot (e.g. drained housing without a population resolution yet)
     cannot inflate commercial revenue.
+
+    Public because ``state_view`` consumes it to compute the commercial
+    popup's ``residents_in_radius`` field; commercial revenue here uses
+    the same call so the two figures stay reconciled.
     """
     capacity = sum(t.housing_capacity for t in state.tiles)
     return min(1.0, state.population / max(1, capacity))
@@ -113,7 +117,7 @@ def commercial_revenue_for_tile(state: WorldState, tile: Tile) -> float:
             capacity_in_radius += other.housing_capacity
     if capacity_in_radius == 0:
         return 0.0
-    occupancy = _occupancy_ratio(state)
+    occupancy = occupancy_ratio(state)
     return (
         capacity_in_radius
         * occupancy
@@ -248,24 +252,6 @@ def well_production_kwh_per_day(well: Well) -> float:
     if well.type != "production":
         return 0.0
     return well.current_rate_bbl_day * PRODUCTION_KWH_PER_BBL
-
-
-def _commercial_residents_in_radius(state: WorldState, tile: Tile) -> float:
-    """Raw capacity × occupancy for the popup ``residents_in_radius`` row.
-
-    Does not multiply by efficiency or the per-resident rate — this is the
-    "how many residents are within reach" number a player wants to read.
-    Returns 0.0 for non-commercial tiles.
-    """
-    if tile.type != "commercial":
-        return 0.0
-    capacity_in_radius = 0
-    for other in state.tiles:
-        if other.housing_capacity <= 0:
-            continue
-        if max(abs(other.x - tile.x), abs(other.y - tile.y)) <= COMMERCIAL_RADIUS:
-            capacity_in_radius += other.housing_capacity
-    return capacity_in_radius * _occupancy_ratio(state)
 
 
 def update_civic_revenue(world: World) -> None:
