@@ -110,7 +110,10 @@ TILE_CATALOG: dict[str, TileSpec] = {
         capex=40_000,
         opex_per_day=80,
         requires_road=False,
-        description="Up to 200 kW (wind-dependent). No road requirement.",
+        description=(
+            "Up to 200 kW (wind-dependent). No road requirement. "
+            "One-cell no-build halo; roads and batteries admitted inside it."
+        ),
         jobs=2,
         capacity_kw=200,
     ),
@@ -122,7 +125,8 @@ TILE_CATALOG: dict[str, TileSpec] = {
         description=(
             "0-500 kW. Ramp 50%/h. Fuel $30/MWh. "
             "Dispatches only when sharing a pipeline network with an "
-            "operational refinery."
+            "operational refinery. One-cell no-build halo; roads and "
+            "batteries admitted inside it."
         ),
         jobs=4,
         capacity_kw=500,
@@ -136,7 +140,8 @@ TILE_CATALOG: dict[str, TileSpec] = {
         requires_road=True,
         description=(
             "375-1500 kW. Min run 25%, ramp 10%/h. Fuel $12/MWh. "
-            "Needs 30 workers and a road-adjacent site."
+            "Needs 30 workers and a road-adjacent site. One-cell "
+            "no-build halo; roads and batteries admitted inside it."
         ),
         jobs=30,
         capacity_kw=1500,

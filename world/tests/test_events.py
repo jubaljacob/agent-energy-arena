@@ -463,8 +463,10 @@ def test_plant_failure_fleet_size_scales_linearly():
         # bump treasury so all `n_plants` placements succeed and the
         # fleet-scaling intent of the test is not silently capped at 6.
         w.state.treasury += 10_000_000.0
+        # Peakers spaced 2 apart so the placement halo (economy-rebalance 10)
+        # doesn't reject the second-onward builds.
         for i in range(n_plants):
-            w.build("gas_peaker", th.x + 1 + i, th.y)
+            w.build("gas_peaker", th.x + 1 + 2 * i, th.y)
         _force_event_rng(w, seed)
         n_trials = 20_000
         hits = 0

@@ -63,19 +63,20 @@ CAPEX is paid up-front at build time; OPEX is deducted daily as long as the tile
 | `gas_peaker` | 80,000 | 150 | 0–500 kW. Ramp 50%/h. Fuel $30/MWh. 0.4 t CO₂/MWh. |
 | `coal_plant` | 200,000 | 400 | 375–1500 kW. Min run 25%. Ramp 10%/h. Fuel $12/MWh. 0.9 t CO₂/MWh. |
 | `battery` | 60,000 | 40 | 200 kW rated, 800 kWh storage, 85% round-trip. |
-| `oil_well` | 50,000 | 100 | Production well. Setpoint 0–200 bbl/day. Drilled via `/drill`. |
-| `injection_well` | 30,000 | 50 | Injection well. Setpoint 0–200 bbl/day. Power 50 kWh/bbl. Drilled via `/drill`. |
+| `oil_well` | 50,000 base | 100 | Production well. Setpoint 0–200 bbl/day. Drilled via `/drill`; actual CAPEX scales quadratically with `target_z` (see Subsurface). |
+| `injection_well` | 30,000 base | 50 | Injection well. Setpoint 0–200 bbl/day. Power 50 kWh/bbl (shed during brownout/blackout, 2× during curtailment). Drilled via `/drill`; quadratic depth-CAPEX. |
 | `refinery` | 150,000 | 300 | +25 jobs. Up to 500 bbl/day. 200 kWh/bbl. 0.3 t CO₂/bbl. Road-adjacent. |
 | `pipeline` | 2,000 | 5 | Crude transport. Routes producer→refinery on the 4-connected component. |
 | `town_hall` | n/a | 0 | Placed at start. Immutable. +100 housing, +30 jobs. |
 
 Adjacency rules:
 
-- `house`, `commercial`, `industrial`, `refinery` must be orthogonally adjacent to a road tile or to another civilian tile that is itself road-connected via 4-connected flood-fill from any road. The town hall counts as a road.
+- `house`, `commercial`, `industrial`, `refinery` must be orthogonally adjacent to a road tile or to another civilian tile that is itself road-connected via 4-connected flood-fill from any road. The town hall counts as a road. Coal plants are road-required for the same reason.
 - Plants, batteries, and wells do not require road adjacency. Pipelines define their own 4-connected crude-transport network.
-- Wells are placed via `/drill`, not `/build`; the call specifies `target_z`. Two wells cannot share the same surface tile.
+- `coal_plant`, `gas_peaker`, and `wind_turbine` each impose a one-cell no-build halo on the 8-neighborhood. Roads and batteries are admitted inside the halo (so plants can still be serviced and storage co-located); the town hall is admitted on the same grounds as a road. Existing tiles that already violate the rule at world-load time are grandfathered — the check only runs at build time.
+- Wells are placed via `/drill`, not `/build`; the call specifies `target_z`. Two wells may share the same surface tile **only** if their `target_z` differs by ≥ 3 voxels (stacked completion); otherwise the call returns `completion_overlap`. A road or other built tile at (x, y) returns `tile_occupied` regardless of depth.
 
-Validity errors returned by mutating endpoints: `insufficient_funds`, `tile_occupied`, `out_of_bounds`, `no_road_adjacency`, `voxel_out_of_bounds`, `unknown_tile_type`, and a handful of endpoint-specific cases (see [API.md](API.md)).
+Validity errors returned by mutating endpoints: `insufficient_funds`, `tile_occupied`, `completion_overlap`, `out_of_bounds`, `no_road_adjacency`, `spacing_violation`, `voxel_out_of_bounds`, `unknown_tile_type`, and a handful of endpoint-specific cases (see [API.md](API.md)). `spacing_violation` carries the offending neighbor's `(x, y)` in the `result` field.
 
 ## Weather (solar, wind, forecasts)
 
@@ -208,13 +209,26 @@ At reset, the world generates 3–7 reservoir blobs (`reservoir_rng` stream):
 
 1. Center voxel `(x, y, z)` with `z ∈ [4, WORLD_D-2]`.
 2. Radius `r ∈ [3, 6]`.
-3. Within Manhattan distance `r` of center, mark a voxel hydrocarbon-bearing with probability `0.6·(1 - dist/r)`.
-4. Per HC voxel: porosity `φ ~ U(0.10, 0.30)`, permeability `k ~ LogU(10, 1000)` mD, oil saturation `S_o ~ U(0.55, 0.80)`, `oil_in_place_bbl = φ · S_o · VOXEL_VOLUME_BBL`. `VOXEL_VOLUME_BBL = 100,000`.
-5. Total OOIP varies by seed; expected 5–15 million bbl on default size.
+3. Within Manhattan distance `r` of center, mark a voxel hydrocarbon-bearing with probability `0.6·(1 - dist/r)`. Each accepted voxel is tagged with the blob's 1-indexed `reservoir_id`; voxels sharing an id form a single 26-connected component.
+4. Per HC voxel: porosity `φ ~ U(0.10, 0.30)`, permeability `k ~ LogU(10, 1000)` mD, oil saturation `S_o ~ U(0.55, 0.80)`, `oil_in_place_bbl = φ · S_o · VOXEL_VOLUME_BBL`. `VOXEL_VOLUME_BBL = 70,000` (per-voxel OIP ranges ~4k–17k bbl, mean ~8.5k).
+5. Total OOIP varies by seed; a typical 36-voxel reservoir holds ~300k bbl — exhaustible by an injection-supported producer within the 10-year game horizon.
 
 ### Surveys
 
-`SEISMIC_BASE_COST = 15_000` (size 8 column); cost scales quadratically with size. Each surveyed voxel returns a noisy estimate of `oil_in_place` and `permeability` (σ ≈ 0.25 / 0.30). Re-surveying is allowed and reduces variance via averaging.
+`SEISMIC_BASE_COST = 15_000`; cost scales quadratically with column size: `cost = 15_000 · (size/4)²`. Default size 4 ($15k, the cheapest legal column); `size ∈ [4, 16]`. Each surveyed voxel returns a noisy estimate of `oil_in_place` and `permeability` (σ ≈ 0.25 / 0.30). Re-surveying is allowed and reduces variance via averaging.
+
+### Drilling
+
+```
+drill_capex(base_capex, target_z, world_d) =
+    base_capex · (1 + (target_z / world_d)²)
+```
+
+`base_capex` is the catalog value (50,000 for `oil_well`, 30,000 for `injection_well`). At `target_z = 0` you pay base; at the deepest legal voxel (`world_d - 1`) the capex is ~2× base.
+
+A new completion at `(x, y, target_z)` is rejected with:
+- `tile_occupied` if any built tile already sits at `(x, y)`.
+- `completion_overlap` if any existing well shares `(x, y)` and its `target_z` is within 2 voxels of the new target (the 3×3×3 drainage cubes would overlap on the z-axis). Stacked completions are legal when `|Δtarget_z| ≥ 3`.
 
 ### Production
 
@@ -223,38 +237,54 @@ def well_production_bbl_day(w, world):
     pool = voxels_in_3x3x3(w.x, w.y, w.target_z)
     V_init   = sum(v.oil_in_place_bbl    for v in pool)
     V_remain = sum(v.oil_remaining_bbl   for v in pool)
-    if V_init == 0: return 0
+    if V_init == 0 or V_remain == 0: return 0
 
     fraction = V_remain / V_init
     k_eff    = mean_perm(pool) / 500.0
 
-    # Injection support from same-reservoir injectors (rate-based)
-    inj_total      = same_reservoir_injection_rate(w, world)
-    pressure_boost = min(0.5, inj_total / V_init)
-    effective      = min(1.0, fraction + pressure_boost)
+    # Rate-based injection support. An injector "qualifies" iff it
+    # shares the producer's reservoir_id AND its (x, y, target_z) sits
+    # at 3D Chebyshev distance > 1 from the producer's target voxel
+    # (adjacent injectors are rejected — breakthrough).
+    qualifying_inj_rate = Σ injector.yesterday_rate_bbl_day  # qualifiers only
+    pressure_boost      = min(0.5, qualifying_inj_rate
+                                   / max(producer.yesterday_rate_bbl_day, 1))
+    effective           = min(1.0, fraction + pressure_boost)
 
-    q_potential = Q_MAX_WELL_BBL_DAY · k_eff · effective    # Q_MAX = 200
+    q_potential = Q_MAX_WELL_BBL_DAY · efficiency · k_eff · effective    # Q_MAX = 200
     q_actual    = min(w.setpoint_rate_bbl_day, q_potential)
 
     drain pool by weights (k · v.oil_remaining)
     return q_actual
 ```
 
+`efficiency ∈ [0, 1]` is the well's staffing ratio (idle wells produce 0 regardless of setpoint). On the day a well is drilled both yesterday rates are 0, so `pressure_boost = 0` that day — support kicks in the *next* day.
+
 ### Injection
 
 ```
-def well_injection(iw):
-    q = min(iw.setpoint_rate_bbl_day, Q_MAX_WELL_BBL_DAY)
-    iw.cumulative_injected_bbl += q
-    iw.power_kw = q · INJECTION_KWH_PER_BBL / 24       # 50 kWh/bbl
-    return q
+def well_injection(iw, prev_balance):
+    baseline_kw = iw.setpoint_rate_bbl_day · INJECTION_KWH_PER_BBL / 24 · efficiency
+    cap_kw      = Q_MAX_WELL_BBL_DAY · INJECTION_KWH_PER_BBL / 24 · efficiency
+
+    if prev_balance in ("brownout", "blackout"):
+        power_kw = 0                              # demand-response shed
+    elif prev_balance == "curtailment":
+        power_kw = min(2 · baseline_kw, cap_kw)   # absorb surplus renewables
+    else:
+        power_kw = baseline_kw
+
+    q_bbl = power_kw / INJECTION_KWH_PER_BBL
+    iw.cumulative_injected_bbl += q_bbl
+    iw.power_kw = power_kw                         # 50 kWh/bbl baseline
+    return q_bbl
 ```
 
 Notes:
 
 - The 3×3×3 pool is clipped at grid boundaries.
 - Multiple wells targeting overlapping pools share the resource; order is deterministic by `well.id`.
-- A well targeting non-HC rock (`V_init = 0`) is wasted CAPEX — it sits silent forever.
+- A well targeting non-HC rock (`V_init = 0`, `reservoir_id is None`) is wasted CAPEX — it sits silent forever and never qualifies as an injector for any producer.
 
 ## Pipelines and crude routing
 

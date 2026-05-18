@@ -833,9 +833,10 @@ def test_state_tile_dict_estimated_revenue_matches_yesterday_times_retail() -> N
     th = next(t for t in w.state.tiles if t.type == "town_hall")
     # A second industrial pushes total demand above the city's renewable
     # output, forcing the coal plant to dispatch. Both industrial and coal
-    # need road adjacency.
+    # need road adjacency. Industrial sits on the opposite side of town
+    # hall so it is outside coal's spacing halo (economy-rebalance 10).
     _give_coal_road(w, th.x, th.y)
-    w.build("industrial", th.x + 1, th.y)
+    w.build("industrial", th.x - 1, th.y)
     w.build("coal_plant", th.x + 2, th.y)
     coal = next(t for t in w.state.tiles if t.type == "coal_plant")
     w.step(days=1)
@@ -1071,7 +1072,8 @@ def test_state_tile_dict_plant_emits_estimated_fuel_and_carbon_cost() -> None:
     w.reset(seed=42)
     th = next(t for t in w.state.tiles if t.type == "town_hall")
     _give_coal_road(w, th.x, th.y)
-    w.build("industrial", th.x + 1, th.y)
+    # Industrial on the opposite side of town hall (outside coal's halo).
+    w.build("industrial", th.x - 1, th.y)
     w.build("coal_plant", th.x + 2, th.y)
     coal = next(t for t in w.state.tiles if t.type == "coal_plant")
     w.step(days=1)
@@ -1108,7 +1110,8 @@ def test_state_tile_dict_plant_net_reconciles_with_component_rows() -> None:
     w.reset(seed=42)
     th = next(t for t in w.state.tiles if t.type == "town_hall")
     _give_coal_road(w, th.x, th.y)
-    w.build("industrial", th.x + 1, th.y)
+    # Industrial on the opposite side of town hall (outside coal's halo).
+    w.build("industrial", th.x - 1, th.y)
     w.build("coal_plant", th.x + 2, th.y)
     w.step(days=1)
     s = w.state_dict()

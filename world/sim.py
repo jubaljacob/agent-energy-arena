@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 
-from world import workforce
+from world import placement, workforce
 from world.catalog import TILE_CATALOG, is_buildable
 from world.config import Config, load_config
 from world.economy import (
@@ -417,6 +417,12 @@ class World:
             x, y, self.state.tiles, self.config.world_w, self.config.world_h
         ):
             return self._build_error("no_road_adjacency")
+        spacing_offender = placement.validate(tile_type, (x, y), self.state.tiles)
+        if spacing_offender is not None:
+            return self._build_error(
+                "spacing_violation",
+                result={"x": spacing_offender.x, "y": spacing_offender.y},
+            )
         if self.state.treasury < spec.capex:
             return self._build_error("insufficient_funds")
 
@@ -501,12 +507,12 @@ class World:
                 return t
         return None
 
-    def _build_error(self, code: str) -> dict[str, Any]:
+    def _build_error(self, code: str, result: Any = None) -> dict[str, Any]:
         return {
             "ok": False,
             "error": code,
             "treasury_after": self.state.treasury,
-            "result": None,
+            "result": result,
         }
 
     # -- Surveys -----------------------------------------------------------

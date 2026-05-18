@@ -3,7 +3,10 @@
 Three things live here, all named as extension points so participants
 can hot-swap any of them in `submit/agent.py`:
 
-  SYSTEM_PROMPT   — mechanic primer + scoring objective + output format.
+  SYSTEM_PROMPT   — mechanic primer + scoring objective + output format,
+                    appended with the canonical `RULES.md` (read live from
+                    disk at import time so the LLM sees the same mechanics
+                    document maintainers edit).
   ACTION_TOOLS    — exactly the 7 tools from PRD §"Reference agents":
                     build, demolish, survey, drill, set_well_rate,
                     set_refinery_rate, step. No `skip` (step with no
@@ -15,7 +18,12 @@ can hot-swap any of them in `submit/agent.py`:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+# Path to the canonical mechanics doc. `prompts.py` lives at
+# `<repo>/agents/prompts.py`; RULES.md is at the repo root.
+_RULES_MD_PATH: Path = Path(__file__).resolve().parents[1] / "RULES.md"
 
 TILE_TYPES: list[str] = [
     "road",
@@ -31,7 +39,7 @@ TILE_TYPES: list[str] = [
 ]
 
 
-SYSTEM_PROMPT: str = """\
+_PROMPT_HEAD: str = """\
 You manage the energy, infrastructure, and economy of a small city over
 a 10-year horizon. Each turn you observe a compressed state summary and
 emit tool calls that mutate the world. Your goal is to maximize the
@@ -118,6 +126,34 @@ Output format:
 """
 
 
+def _load_rules_md() -> str:
+    """Read RULES.md from the repo root so the LLM sees the canonical
+    mechanics doc the project maintains. Returns empty string if the
+    file isn't reachable (e.g., the agents package was installed standalone
+    without the surrounding repo) — in that case the curated `_PROMPT_HEAD`
+    still ships the scoring objective + output-format contract.
+    """
+    try:
+        return _RULES_MD_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+_RULES_MD: str = _load_rules_md()
+
+
+SYSTEM_PROMPT: str = _PROMPT_HEAD + (
+    "\n\n# Canonical mechanics (RULES.md)\n\n"
+    "The block below is the live `RULES.md` from the repo. Every\n"
+    "formula, threshold, and error key in it is the source of truth\n"
+    "for what the world will accept and how it will respond. Use it\n"
+    "when picking actions — when this section and the primer above\n"
+    "disagree, this section wins.\n\n" + _RULES_MD
+    if _RULES_MD
+    else ""
+)
+
+
 # ---------- Action tools schema --------------------------------------------
 
 
@@ -127,7 +163,9 @@ def _build_action_tools() -> list[dict[str, Any]]:
             "name": "build",
             "description": (
                 "Place a tile at (x, y). Civilian tiles must be adjacent to a road. "
-                "Returns ok=false with error='no_road_adjacency' / 'occupied' / "
+                "Coal, gas, and wind impose a one-cell no-build halo (roads and "
+                "batteries are admitted inside it). Returns ok=false with "
+                "error='no_road_adjacency' / 'spacing_violation' / 'occupied' / "
                 "'insufficient_funds' on rejection."
             ),
             "parameters": {

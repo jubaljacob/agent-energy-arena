@@ -85,12 +85,14 @@ def test_coal_cheaper_per_mwh_than_gas_at_default_carbon() -> None:
 
 def test_renewable_and_gas_plants_do_not_require_road_adjacency() -> None:
     w = _fresh_world()
-    # Far corner of the world, no roads connecting.
+    # Far corner of the world, no roads connecting. Spread each plant out
+    # so the wind/gas spacing halo (economy-rebalance 10) doesn't fire on
+    # an unrelated test about road requirements.
     res = w.build("solar_farm", 0, 0)
     assert res["ok"] is True, res
-    res = w.build("wind_turbine", 1, 0)
+    res = w.build("wind_turbine", 3, 0)
     assert res["ok"] is True, res
-    res = w.build("gas_peaker", 2, 0)
+    res = w.build("gas_peaker", 6, 0)
     assert res["ok"] is True, res
 
 
@@ -563,14 +565,17 @@ def test_renewables_build_via_api() -> None:
     """All four plant types are accepted via /build."""
     w = _fresh_world()
     th = next(t for t in w.state.tiles if t.type == "town_hall")
+    # Spread plants out so the wind/gas spacing halo (economy-rebalance 10)
+    # doesn't fire on a smoke test that only cares about the build endpoint.
     for tile_type, x in (
         ("solar_farm", 0),
-        ("wind_turbine", 1),
-        ("gas_peaker", 2),
+        ("wind_turbine", 3),
+        ("gas_peaker", 6),
     ):
         res = w.build(tile_type, x, 0)
         assert res["ok"] is True, (tile_type, res)
     # Coal requires road; town hall participates in the road network for adjacency.
+    # Adjacent to town hall is admitted inside the halo (town_hall ∈ road network).
     res = w.build("coal_plant", th.x + 1, th.y)
     assert res["ok"] is True, res
 
