@@ -119,7 +119,11 @@ TILE_CATALOG: dict[str, TileSpec] = {
         capex=80_000,
         opex_per_day=150,
         requires_road=False,
-        description="0-500 kW. Ramp 50%/h. Fuel $30/MWh.",
+        description=(
+            "0-500 kW. Ramp 50%/h. Fuel $30/MWh. "
+            "Dispatches only when sharing a pipeline network with an "
+            "operational refinery."
+        ),
         jobs=4,
         capacity_kw=500,
         fuel_cost_per_mwh=30.0,

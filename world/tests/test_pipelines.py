@@ -7,7 +7,7 @@ slice 08; this slice only pins the pure-function contract.
 
 from __future__ import annotations
 
-from world.pipelines import pipeline_components, routing_units
+from world.pipelines import peaker_supply, pipeline_components, routing_units
 from world.state import Tile, Well
 
 
@@ -15,8 +15,12 @@ def _pipe(id_: str, x: int, y: int) -> Tile:
     return Tile(id=id_, type="pipeline", x=x, y=y, built_day=0)
 
 
-def _refinery(id_: str, x: int, y: int) -> Tile:
-    return Tile(id=id_, type="refinery", x=x, y=y, built_day=0)
+def _refinery(id_: str, x: int, y: int, operational: bool = True) -> Tile:
+    return Tile(id=id_, type="refinery", x=x, y=y, built_day=0, operational=operational)
+
+
+def _peaker(id_: str, x: int, y: int) -> Tile:
+    return Tile(id=id_, type="gas_peaker", x=x, y=y, built_day=0)
 
 
 def _well(id_: str, x: int, y: int, well_type: str = "production") -> Well:
@@ -201,3 +205,90 @@ def test_pure_no_mutation_of_inputs():
 
     assert tiles == tiles_snapshot
     assert wells == wells_snapshot
+
+
+# -- peaker_supply ----------------------------------------------------------
+
+
+def test_peaker_supply_true_when_sharing_network_with_operational_refinery():
+    """Peaker adjacent to a pipeline whose component reaches an operational refinery."""
+    peaker = _peaker("gp1", 4, 5)
+    tiles = [
+        peaker,
+        _pipe("p1", 5, 5),
+        _pipe("p2", 6, 5),
+        _refinery("ref1", 7, 5),
+    ]
+    assert peaker_supply(peaker, tiles) is True
+
+
+def test_peaker_supply_false_when_connected_refinery_is_not_operational():
+    """Only operational refineries count as supply."""
+    peaker = _peaker("gp1", 4, 5)
+    tiles = [
+        peaker,
+        _pipe("p1", 5, 5),
+        _pipe("p2", 6, 5),
+        _refinery("ref1", 7, 5, operational=False),
+    ]
+    assert peaker_supply(peaker, tiles) is False
+
+
+def test_peaker_supply_false_when_pipeline_network_isolated_from_refineries():
+    """Peaker shares a network that has no refinery at all."""
+    peaker = _peaker("gp1", 4, 5)
+    tiles = [
+        peaker,
+        # Peaker's network: no refinery touches it.
+        _pipe("p1", 5, 5),
+        _pipe("p2", 6, 5),
+        # Disjoint network with an operational refinery — should not help.
+        _pipe("q1", 20, 20),
+        _refinery("ref_far", 21, 20),
+    ]
+    assert peaker_supply(peaker, tiles) is False
+
+
+def test_peaker_supply_false_when_peaker_has_no_pipeline_adjacency():
+    """No 4-neighbour pipeline tile → not on any network → unsupplied."""
+    peaker = _peaker("gp1", 10, 10)
+    tiles = [
+        peaker,
+        _pipe("p1", 5, 5),
+        _refinery("ref1", 6, 5),
+    ]
+    assert peaker_supply(peaker, tiles) is False
+
+
+def test_peaker_supply_diagonal_adjacency_is_not_enough():
+    """Pipeline graph is 4-connected; a diagonal pipeline does not connect."""
+    peaker = _peaker("gp1", 4, 5)
+    tiles = [
+        peaker,
+        # Pipeline diagonally adjacent only.
+        _pipe("p1", 5, 6),
+        _refinery("ref1", 6, 6),
+    ]
+    assert peaker_supply(peaker, tiles) is False
+
+
+def test_peaker_supply_picks_up_refinery_reached_via_long_path():
+    """Reachability through the component, not just direct adjacency."""
+    peaker = _peaker("gp1", 4, 5)
+    tiles = [
+        peaker,
+        _pipe("p1", 5, 5),
+        _pipe("p2", 6, 5),
+        _pipe("p3", 6, 6),
+        _pipe("p4", 6, 7),
+        _refinery("ref1", 7, 7),
+    ]
+    assert peaker_supply(peaker, tiles) is True
+
+
+def test_peaker_supply_pure_no_mutation():
+    peaker = _peaker("gp1", 4, 5)
+    tiles = [peaker, _pipe("p1", 5, 5), _refinery("ref1", 6, 5)]
+    snapshot = list(tiles)
+    peaker_supply(peaker, tiles)
+    assert tiles == snapshot

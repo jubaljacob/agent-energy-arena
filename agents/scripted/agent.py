@@ -123,8 +123,10 @@ class ScriptedAgent(BaseAgent):
 
         # ----- Bootstrap: minimum viable city -----------------------------
         # Roads in a + cross around town hall, then 4 houses + 2 commercial,
-        # 4 solar + 1 gas peaker. Ensures pop has jobs/housing/electricity
-        # before week-4 phase rollover.
+        # 4 solar + 1 coal_plant. Coal carries the night-peak baseload
+        # because issue 09 makes gas peakers useless before a refinery
+        # exists. Ensures pop has jobs/housing/electricity before week-4
+        # phase rollover.
         if phase == "bootstrap":
             self._lay_initial_roads(treasury, cx, cy, w, h, occupied)
             return
@@ -132,7 +134,7 @@ class ScriptedAgent(BaseAgent):
         # ----- Crisis response (highest priority) -------------------------
         # Heatwave → emergency gas peaker (track id to demolish at expiry).
         if "heatwave" in active_event_types and self._heatwave_peaker_id is None:
-            new_id = self._build_plant("gas_peaker", treasury, cx, cy, w, h, occupied)
+            new_id = self._build_gas_peaker_with_supply(treasury, cx, cy, w, h, occupied, tiles)
             if new_id is not None:
                 self._heatwave_peaker_id = new_id
                 return
@@ -145,7 +147,7 @@ class ScriptedAgent(BaseAgent):
         # Blackout → emergency gas peaker.
         balance = state.get("power_now", {}).get("balance_state", "balanced")
         if balance == "blackout":
-            self._build_plant("gas_peaker", treasury, cx, cy, w, h, occupied)
+            self._build_gas_peaker_with_supply(treasury, cx, cy, w, h, occupied, tiles)
             return
 
         # ----- Reserve-margin: dispatchable capacity must cover peak ------
@@ -167,8 +169,8 @@ class ScriptedAgent(BaseAgent):
                 and self._build_civilian("coal_plant", treasury, cx, cy, w, h, occupied, tiles)
             ):
                 return
-            if treasury >= 80_000 and self._build_plant(
-                "gas_peaker", treasury, cx, cy, w, h, occupied
+            if treasury >= 80_000 and self._build_gas_peaker_with_supply(
+                treasury, cx, cy, w, h, occupied, tiles
             ):
                 return
         # Renewable topup: occasional wind for the r_term, gated on a healthy
@@ -343,7 +345,9 @@ class ScriptedAgent(BaseAgent):
                     break
             # Refinery just landed: lay pipeline from each existing producer
             # to it so prior orphans (issue 10 AC: "queues the path as part
-            # of the refinery-build flow") get connected.
+            # of the refinery-build flow") get connected. Also connect every
+            # standing gas peaker — they don't dispatch without a pipeline
+            # path to an operational refinery (issue 09).
             if refinery_xy is not None:
                 latest_occupied = {(t["x"], t["y"]) for t in latest["tiles"]}
                 latest_occupied |= {(w_["x"], w_["y"]) for w_ in latest["wells"]}
@@ -353,6 +357,18 @@ class ScriptedAgent(BaseAgent):
                     self._lay_pipeline_to_refinery(
                         int(w_["x"]),
                         int(w_["y"]),
+                        latest["tiles"],
+                        latest_occupied,
+                        w,
+                        h,
+                        refinery_xy=refinery_xy,
+                    )
+                for t in latest["tiles"]:
+                    if t["type"] != "gas_peaker":
+                        continue
+                    self._lay_pipeline_to_refinery(
+                        int(t["x"]),
+                        int(t["y"]),
                         latest["tiles"],
                         latest_occupied,
                         w,
@@ -387,15 +403,18 @@ class ScriptedAgent(BaseAgent):
     ) -> None:
         """Bootstrap (PRD weeks 1-4): minimum viable city.
 
-        Brief baseline: 1 road / 2 commercial / 2 houses / 4 solar / 1 gas
-        peaker. We ship a + cross of roads (cheap, anchors more growth) +
+        Brief baseline: 1 road / 2 commercial / 2 houses / 4 solar / 1 coal
+        plant. We ship a + cross of roads (cheap, anchors more growth) +
         the prescribed civilian/plant counts, all in one turn. Bootstrap
         is the only multi-action turn — every later phase is single-action
         for cash discipline."""
         # Plants off the road cross axes so they don't collide with the
-        # bootstrap road extension below.
+        # bootstrap road extension below. Gas peakers are intentionally
+        # absent: issue 09 makes a peaker only dispatch when sharing a
+        # pipeline network with an operational refinery, and there is no
+        # refinery this early. Coal carries the night-peak baseload until
+        # the diversify phase builds out the oil loop.
         plan: list[tuple[str, int, int]] = [
-            ("gas_peaker", cx - 8, cy),
             ("solar_farm", cx + 8, cy - 1),
             ("solar_farm", cx + 8, cy),
             ("solar_farm", cx + 8, cy + 1),
@@ -408,6 +427,10 @@ class ScriptedAgent(BaseAgent):
         for d in range(1, 7):
             for dx, dy in ((d, 0), (-d, 0), (0, d), (0, -d)):
                 plan.append(("road", cx + dx, cy + dy))
+        # Coal must run AFTER the road cross — needs road adjacency
+        # (economy-rebalance #05). (cx+5, cy) is a road from the loop above;
+        # (cx+5, cy+1) is the coal slot.
+        plan.append(("coal_plant", cx + 5, cy + 1))
         # 6 commercial up-front: 2 from PRD baseline + 4 to defeat the
         # int(pop) growth-truncation trap. With pop=100 and only 2
         # commercial, jobs<0.7·pop triggers immediate decline.
@@ -455,6 +478,34 @@ class ScriptedAgent(BaseAgent):
             r = self.api.build(tile_type, x, y)
             if r.get("ok"):
                 return str(r["result"]["id"])
+            if r.get("error") == "insufficient_funds":
+                return None
+        return None
+
+    def _build_gas_peaker_with_supply(
+        self,
+        treasury: float,
+        cx: int,
+        cy: int,
+        w: int,
+        h: int,
+        occupied: set[tuple[int, int]],
+        tiles: list[dict[str, Any]],
+    ) -> str | None:
+        """Build a gas peaker on the perimeter, then lay a pipeline to the
+        nearest refinery so the peaker actually dispatches (issue 09 — gas
+        peakers require a 4-connected pipeline path to an operational
+        refinery). No-op pipeline pass if no refinery exists yet; the
+        refinery-build branch retroactively connects existing peakers."""
+        for x, y in _perimeter_spiral(cx, cy, w, h):
+            if (x, y) in occupied:
+                continue
+            r = self.api.build("gas_peaker", x, y)
+            if r.get("ok"):
+                tile_id = str(r["result"]["id"])
+                occupied.add((x, y))
+                self._lay_pipeline_to_refinery(x, y, tiles, occupied, w, h)
+                return tile_id
             if r.get("error") == "insufficient_funds":
                 return None
         return None

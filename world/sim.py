@@ -36,7 +36,7 @@ from world.events import (
     sample_and_apply_events,
 )
 from world.grid import has_road_adjacency, in_bounds, road_connected_set
-from world.pipelines import routing_units
+from world.pipelines import peaker_supply, routing_units
 from world.population import DAILY_TAX_PER_CAPITA, update_population
 from world.power import (
     PLANT_TYPES,
@@ -825,6 +825,16 @@ class World:
             demand_kw = civilian_demand_kw + inj_total_kw + prod_total_kw + refinery_process_load_kw
 
             plants = [t for t in self.state.tiles if t.type in PLANT_TYPES]
+            # Gas peakers must share a 4-connected pipeline network with at
+            # least one operational refinery to dispatch this hour. Filtered
+            # peakers are treated identically to plant_failure (zero output);
+            # destroying a refinery propagates to its peakers next hour with
+            # no new outage code branch.
+            unsupplied_peakers = frozenset(
+                p.id
+                for p in plants
+                if p.type == "gas_peaker" and not peaker_supply(p, self.state.tiles)
+            )
             outputs, supply_kw, by_source = dispatch(
                 plants,
                 demand_kw,
@@ -834,6 +844,7 @@ class World:
                 hour,
                 solar_derate=solar_derate_multiplier(self.state),
                 fuel_cost_per_mwh=self.state.plant_fuel_cost_per_mwh,
+                unsupplied_peaker_ids=unsupplied_peakers,
             )
 
             # Battery dispatch (balance-upgrade-p0 slice 02). Charge step

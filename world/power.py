@@ -134,6 +134,7 @@ def dispatch(
     h: int,
     solar_derate: float = 1.0,
     fuel_cost_per_mwh: dict[str, float] | None = None,
+    unsupplied_peaker_ids: frozenset[str] | None = None,
 ) -> tuple[dict[str, float], float, dict[str, float]]:
     """Run the merit-order dispatch for one hour.
 
@@ -150,18 +151,28 @@ def dispatch(
     catalog defaults are used so unit tests calling `dispatch()` directly
     keep their semantics. Production callers pass `state.plant_fuel_cost_per_mwh`
     so a scenario can flip the merit order via a fuel-price shock.
+
+    `unsupplied_peaker_ids` (default None) lists gas peakers that are not
+    connected to an operational refinery via the pipeline network this
+    hour. Filtered before merit-order ordering and treated identically to
+    a `plant_failure` (zero output, no ramp credit) — downstream
+    brownout/blackout accounting flows through the existing path. Callers
+    compute the set via `world.pipelines.peaker_supply`.
     """
     outputs: dict[str, float] = {p.id: 0.0 for p in plants}
 
     cloud = float(weather.get("cloud_factor", 0.85))
     wind_v = float(weather.get("wind_speed_mps", 0.0))
+    unsupplied = unsupplied_peaker_ids or frozenset()
 
     def _cost(plant_type: str) -> float:
         if fuel_cost_per_mwh is not None and plant_type in fuel_cost_per_mwh:
             return fuel_cost_per_mwh[plant_type]
         return TILE_CATALOG[plant_type].fuel_cost_per_mwh
 
-    operational = [p for p in plants if p.operational]
+    operational = [
+        p for p in plants if p.operational and not (p.type == "gas_peaker" and p.id in unsupplied)
+    ]
     solar = [p for p in operational if p.type == "solar_farm"]
     wind = [p for p in operational if p.type == "wind_turbine"]
     coal = sorted(

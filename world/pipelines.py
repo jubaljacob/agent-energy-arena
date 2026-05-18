@@ -139,3 +139,58 @@ def _first_neighbour_component(
         if idx is not None:
             return idx
     return None
+
+
+def _neighbour_components(x: int, y: int, pos_to_comp: dict[tuple[int, int], int]) -> set[int]:
+    found: set[int] = set()
+    for dx, dy in _ORTHO:
+        idx = pos_to_comp.get((x + dx, y + dy))
+        if idx is not None:
+            found.add(idx)
+    return found
+
+
+def peaker_supply(peaker_tile: Tile, tiles: Iterable[Tile]) -> bool:
+    """True iff the gas peaker shares a 4-connected pipeline network with at
+    least one operational refinery.
+
+    The peaker is "on a network" iff one of its four orthogonal neighbours is
+    a pipeline tile in that component (mirrors the well/refinery rule in
+    `routing_units`). Diagonal adjacency does not connect. Non-operational
+    refineries do not count as supply — destroying a refinery makes every
+    peaker on its network unsupplied on the next call.
+    """
+    tiles_list = list(tiles)
+
+    # Same bound derivation as `routing_units`: the bound only filters
+    # out-of-range pipeline neighbours, so any value strictly larger than
+    # the max input coord is safe.
+    max_xy = 0
+    for t in tiles_list:
+        if t.x > max_xy:
+            max_xy = t.x
+        if t.y > max_xy:
+            max_xy = t.y
+    if peaker_tile.x > max_xy:
+        max_xy = peaker_tile.x
+    if peaker_tile.y > max_xy:
+        max_xy = peaker_tile.y
+    bound = max_xy + 2
+
+    components = pipeline_components(tiles_list, bound, bound)
+    pos_to_comp: dict[tuple[int, int], int] = {}
+    for idx, comp in enumerate(components):
+        for pos in comp:
+            pos_to_comp[pos] = idx
+
+    peaker_comps = _neighbour_components(peaker_tile.x, peaker_tile.y, pos_to_comp)
+    if not peaker_comps:
+        return False
+
+    for t in tiles_list:
+        if t.type != "refinery" or not t.operational:
+            continue
+        ref_comps = _neighbour_components(t.x, t.y, pos_to_comp)
+        if ref_comps & peaker_comps:
+            return True
+    return False

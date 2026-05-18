@@ -1,9 +1,9 @@
 {
   "agent": "agents.scripted",
-  "population": 103.0,
-  "raw_score": 0.3079631864412457,
-  "renewable_share": 0.650386581393589,
+  "population": 102.0,
+  "raw_score": 0.6523097117429021,
+  "renewable_share": 0.6610281519117797,
   "scenario": "scenarios.grid_stress",
   "seed": 42,
-  "treasury_delta": -227991.73214763578
+  "treasury_delta": -368556.52630311286
 }

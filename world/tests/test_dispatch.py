@@ -277,6 +277,84 @@ def test_gas_starts_at_zero_with_no_prev_output() -> None:
     assert outputs[p.id] == pytest.approx(cap * GAS_RAMP_PER_HOUR)
 
 
+def test_unsupplied_peaker_zeroed_like_plant_failure() -> None:
+    """A peaker in `unsupplied_peaker_ids` outputs 0 and is excluded from gas
+    by_source — same shape as `operational=False` (plant_failure)."""
+    p = _plant("gas_peaker")
+    outputs, supply, by_source = dispatch(
+        [p],
+        demand_kw=10_000.0,
+        prev_outputs={},
+        weather={},
+        D=0,
+        h=12,
+        unsupplied_peaker_ids=frozenset({p.id}),
+    )
+    assert outputs[p.id] == 0.0
+    assert by_source["gas"] == 0.0
+    assert supply == 0.0
+
+
+def test_unsupplied_peaker_matches_non_operational_peaker_outputs() -> None:
+    """Filtering via `unsupplied_peaker_ids` is structurally equivalent to
+    `operational=False` (plant_failure path) — same outputs, same by_source."""
+    failed = _plant("gas_peaker", idx=1)
+    failed.operational = False
+    unsupplied = _plant("gas_peaker", idx=2)
+    failed_out, failed_supply, failed_by = dispatch(
+        [failed], demand_kw=10_000.0, prev_outputs={}, weather={}, D=0, h=12
+    )
+    unsupplied_out, unsupplied_supply, unsupplied_by = dispatch(
+        [unsupplied],
+        demand_kw=10_000.0,
+        prev_outputs={},
+        weather={},
+        D=0,
+        h=12,
+        unsupplied_peaker_ids=frozenset({unsupplied.id}),
+    )
+    assert failed_out[failed.id] == unsupplied_out[unsupplied.id] == 0.0
+    assert failed_supply == unsupplied_supply == 0.0
+    assert failed_by == unsupplied_by
+
+
+def test_supplied_peaker_dispatches_normally_when_demand_present() -> None:
+    """An empty unsupplied set is a no-op; gas dispatches per ramp."""
+    p = _plant("gas_peaker")
+    outputs_default, _, _ = dispatch(
+        [p], demand_kw=10_000.0, prev_outputs={}, weather={}, D=0, h=12
+    )
+    outputs_empty, _, _ = dispatch(
+        [p],
+        demand_kw=10_000.0,
+        prev_outputs={},
+        weather={},
+        D=0,
+        h=12,
+        unsupplied_peaker_ids=frozenset(),
+    )
+    assert outputs_default[p.id] > 0.0
+    assert outputs_empty[p.id] == pytest.approx(outputs_default[p.id])
+
+
+def test_unsupplied_filter_does_not_affect_coal_or_renewables() -> None:
+    """The filter only matches gas peakers — coal with the same id still
+    dispatches. (Defensive: prevents an over-broad filter on the type check.)
+    """
+    coal = _plant("coal_plant", idx=1)
+    outputs, _s, by_source = dispatch(
+        [coal],
+        demand_kw=10_000.0,
+        prev_outputs={},
+        weather={},
+        D=0,
+        h=12,
+        unsupplied_peaker_ids=frozenset({coal.id}),
+    )
+    assert outputs[coal.id] > 0.0
+    assert by_source["coal"] > 0.0
+
+
 def test_gas_does_not_dispatch_when_demand_already_met() -> None:
     """If renewables + coal cover demand, gas stays at zero."""
     solar = _plant("solar_farm", idx=1)
@@ -495,6 +573,61 @@ def test_renewables_build_via_api() -> None:
     # Coal requires road; town hall participates in the road network for adjacency.
     res = w.build("coal_plant", th.x + 1, th.y)
     assert res["ok"] is True, res
+
+
+def _build_pipeline_supplied_peaker(w: World) -> tuple[Tile, Tile]:
+    """Place peaker — pipeline — refinery in a row, return (peaker, refinery).
+
+    Forces the peaker to fire by zeroing pop, then adding industrial demand
+    that exceeds the renewables (none built) + coal must-run (none built) =
+    0 baseline supply.
+    """
+    w.state.population = 0
+    _build_at(w, "industrial", 10, 10)  # 300 kW continuous demand
+    peaker = _build_at(w, "gas_peaker", 4, 5)
+    _build_at(w, "pipeline", 5, 5)
+    refinery = _build_at(w, "refinery", 6, 5)
+    return peaker, refinery
+
+
+def test_peaker_with_pipeline_supply_dispatches_through_sim() -> None:
+    """End-to-end: a peaker on a pipeline network with an operational refinery
+    runs over a full day. Demand is industrial (no other supply), so any nonzero
+    gas output proves the supply gate let the peaker through."""
+    w = _fresh_world()
+    peaker, _refinery = _build_pipeline_supplied_peaker(w)
+    w.step(days=1)
+    assert peaker.kwh_served_yesterday > 0.0
+
+
+def test_peaker_zeroed_when_no_pipeline_adjacency() -> None:
+    """A peaker built away from any pipeline outputs zero over the day."""
+    w = _fresh_world()
+    w.state.population = 0
+    _build_at(w, "industrial", 10, 10)
+    peaker = _build_at(w, "gas_peaker", 20, 20)  # no pipeline anywhere near
+    w.step(days=1)
+    assert peaker.kwh_served_yesterday == 0.0
+
+
+def test_peaker_zeroed_after_refinery_destroyed_mid_game() -> None:
+    """Destroying the only connected refinery cuts the peaker on the next day."""
+    w = _fresh_world()
+    peaker, refinery = _build_pipeline_supplied_peaker(w)
+    w.step(days=1)
+    served_before = peaker.kwh_served_yesterday
+    assert served_before > 0.0
+
+    refinery.operational = False
+    w.step(days=1)
+    assert peaker.kwh_served_yesterday == 0.0
+
+
+def test_gas_peaker_catalog_mentions_pipeline_refinery_requirement() -> None:
+    spec = TILE_CATALOG["gas_peaker"]
+    desc = spec.description.lower()
+    assert "pipeline" in desc
+    assert "refinery" in desc
 
 
 def test_step_size_invariance_with_plants() -> None:

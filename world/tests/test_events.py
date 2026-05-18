@@ -41,6 +41,30 @@ from world.events import (
     sample_and_apply_events,
 )
 from world.sim import World
+from world.state import Tile
+
+
+def _supply_peaker_with_pipeline_refinery(w: World, peaker_x: int, peaker_y: int) -> None:
+    """Inject pipeline + operational refinery 4-adjacent to a peaker.
+
+    Direct tile insertion (not via `w.build`) so the refinery's road
+    requirement does not bleed into tests that care only about peaker
+    dispatch. Pipeline at peaker_x + 1, refinery at peaker_x + 2.
+    """
+    w.state.tiles.append(
+        Tile(id="test-pipe", type="pipeline", x=peaker_x + 1, y=peaker_y, built_day=0)
+    )
+    w.state.tiles.append(
+        Tile(
+            id="test-ref",
+            type="refinery",
+            x=peaker_x + 2,
+            y=peaker_y,
+            built_day=0,
+            operational=True,
+        )
+    )
+
 
 # -- Constants pinned to PRD ----------------------------------------------
 
@@ -325,10 +349,12 @@ def test_fuel_shock_hits_gas_harder():
     th_world.reset(seed=42)
     th = next(t for t in th_world.state.tiles if t.type == "town_hall")
 
-    # Baseline gas-only world (no shock).
+    # Baseline gas-only world (no shock). Peaker needs a pipeline-supplied
+    # operational refinery to dispatch at all (issue 09 — pipeline coupling).
     w_gas_normal = World()
     w_gas_normal.reset(seed=42)
     w_gas_normal.build("gas_peaker", th.x + 1, th.y)
+    _supply_peaker_with_pipeline_refinery(w_gas_normal, th.x + 1, th.y)
     w_gas_normal.step(days=1)
     gas_normal = w_gas_normal.state.today_summary_so_far["fuel_cost"]
 
@@ -336,6 +362,7 @@ def test_fuel_shock_hits_gas_harder():
     w_gas_shock = World()
     w_gas_shock.reset(seed=42)
     w_gas_shock.build("gas_peaker", th.x + 1, th.y)
+    _supply_peaker_with_pipeline_refinery(w_gas_shock, th.x + 1, th.y)
     w_gas_shock.state.active_events.append(
         {"type": "fuel_price_shock", "started_day": 0, "ends_day": 30, "severity": 2.5}
     )
