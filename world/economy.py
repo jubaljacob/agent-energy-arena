@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from world.sim import World
     from world.state import Tile
 
-REFINERY_MAX_BBL_DAY: float = 500.0
+REFINERY_MAX_BBL_DAY: float = 250.0
 REFINERY_YIELD: float = 0.85
 REFINERY_KWH_PER_BBL: float = 200.0
 REFINERY_CO2_PER_BBL: float = 0.30
@@ -75,7 +75,7 @@ def route_crude(refineries: list[Tile], total_crude_bbl: float) -> dict[str, flo
     is the deterministic tiebreak when two refineries share a setpoint.
 
     Per-refinery cap = ``REFINERY_MAX_BBL_DAY × workforce.efficiency(r)``,
-    so a half-staffed refinery routes at most 250 bbl/day and an idle one
+    so a half-staffed refinery routes at most 125 bbl/day and an idle one
     routes 0. The player-facing ``setpoint_rate_bbl_day`` itself is not
     re-clamped here — only the actual throughput respects the cap.
 

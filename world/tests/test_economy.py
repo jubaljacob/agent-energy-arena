@@ -105,13 +105,13 @@ def _build_road_link(world: World, x: int, y: int) -> None:
 
 
 def test_refine_one_yield_is_85_percent():
-    actual, refined = refine_one(setpoint_rate_bbl_day=400, available_crude_bbl=400)
-    assert actual == 400
-    assert refined == pytest.approx(400 * REFINERY_YIELD)
+    actual, refined = refine_one(setpoint_rate_bbl_day=200, available_crude_bbl=200)
+    assert actual == 200
+    assert refined == pytest.approx(200 * REFINERY_YIELD)
 
 
 def test_refine_one_capped_at_max_throughput():
-    """Setpoint above 500 is silently bounded by REFINERY_MAX_BBL_DAY."""
+    """Setpoint above the cap is silently bounded by REFINERY_MAX_BBL_DAY."""
     actual, refined = refine_one(setpoint_rate_bbl_day=999, available_crude_bbl=1_000)
     assert actual == REFINERY_MAX_BBL_DAY
     assert refined == pytest.approx(REFINERY_MAX_BBL_DAY * REFINERY_YIELD)
@@ -134,12 +134,12 @@ def test_refine_one_zero_setpoint_zero_actual():
 
 
 def test_route_crude_higher_setpoint_first():
-    big = _refinery_tile("ref-1", setpoint=400)
-    small = _refinery_tile("ref-2", setpoint=100)
-    # Total crude = 450 → big takes 400, small takes 50.
-    actual = route_crude([small, big], total_crude_bbl=450)
-    assert actual["ref-1"] == 400
-    assert actual["ref-2"] == 50
+    big = _refinery_tile("ref-1", setpoint=200)
+    small = _refinery_tile("ref-2", setpoint=50)
+    # Total crude = 225 → big takes 200, small takes 25.
+    actual = route_crude([small, big], total_crude_bbl=225)
+    assert actual["ref-1"] == 200
+    assert actual["ref-2"] == 25
 
 
 def test_route_crude_id_ascending_tiebreak():
@@ -192,7 +192,7 @@ def _idle_refinery(rid: str, setpoint: float) -> Tile:
 
 
 def test_route_crude_half_staffed_caps_at_efficiency_scaled_max():
-    """staffed_jobs=12 / jobs=25 → eff=0.48, cap = 500 × 0.48 = 240."""
+    """staffed_jobs=12 / jobs=25 → eff=0.48, cap = 250 × 0.48 = 120."""
     r = _half_staffed_refinery("ref-1", setpoint=999)
     actual = route_crude([r], total_crude_bbl=1000)
     assert actual["ref-1"] == pytest.approx(REFINERY_MAX_BBL_DAY * (12 / 25))
@@ -207,20 +207,20 @@ def test_route_crude_idle_refinery_takes_zero():
 
 def test_route_crude_full_then_half_staffed_with_constrained_crude():
     """Two refineries with the same setpoint, ordered by id ascending.
-    A (full, cap=500) gets first crack; B (half, cap=240) absorbs the rest."""
-    a = _refinery_tile("ref-1", setpoint=500)  # staffed full by helper
-    b = _half_staffed_refinery("ref-2", setpoint=500)
-    actual = route_crude([b, a], total_crude_bbl=600)
-    assert actual["ref-1"] == 500
-    assert actual["ref-2"] == 100  # 600 - 500 = 100, well under B's 240 cap
+    A (full, cap=250) gets first crack; B (half, cap=120) absorbs the rest."""
+    a = _refinery_tile("ref-1", setpoint=250)  # staffed full by helper
+    b = _half_staffed_refinery("ref-2", setpoint=250)
+    actual = route_crude([b, a], total_crude_bbl=300)
+    assert actual["ref-1"] == 250
+    assert actual["ref-2"] == 50  # 300 - 250 = 50, well under B's 120 cap
 
 
 def test_route_crude_half_staffed_cap_overrides_setpoint():
-    """Setpoint=500 but staffed_jobs=12 (cap=240): actual is the cap, not
+    """Setpoint=500 but staffed_jobs=12 (cap=120): actual is the cap, not
     the setpoint. The player-set setpoint stays at 500 (not auto-clamped)."""
     r = _half_staffed_refinery("ref-1", setpoint=500)
     actual = route_crude([r], total_crude_bbl=1000)
-    assert actual["ref-1"] == pytest.approx(240.0)
+    assert actual["ref-1"] == pytest.approx(120.0)
     assert r.setpoint_rate_bbl_day == 500.0  # unchanged by routing
 
 
@@ -346,7 +346,7 @@ def test_refined_revenue_at_full_throughput():
     w.step(days=1)
     rate = w.state.wells[0].current_rate_bbl_day
     refinery = next(t for t in w.state.tiles if t.type == "refinery")
-    # First well's daily output is ≤ 200 bbl/day; well below the 500-bbl
+    # First well's daily output is ≤ 200 bbl/day; well below the 250-bbl
     # refinery cap, so all crude is refined.
     assert refinery.current_throughput_bbl_day == pytest.approx(rate)
     # No surplus → crude_revenue = 0.
@@ -570,11 +570,11 @@ def test_idle_refinery_draws_zero_process_load():
 
 
 def test_half_staffed_refinery_process_load_tracks_throughput():
-    """A half-staffed refinery refining at its 240-bbl cap draws exactly
-    half the process kW a fully-staffed refinery at 500 bbl/day would."""
-    half_kw = refinery_process_kw(240.0)
-    full_kw = refinery_process_kw(500.0)
-    assert half_kw == pytest.approx(240.0 * REFINERY_KWH_PER_BBL / 24.0)
+    """A half-staffed refinery refining at its 120-bbl cap draws exactly
+    half the process kW a fully-staffed refinery at 250 bbl/day would."""
+    half_kw = refinery_process_kw(120.0)
+    full_kw = refinery_process_kw(250.0)
+    assert half_kw == pytest.approx(120.0 * REFINERY_KWH_PER_BBL / 24.0)
     assert half_kw == pytest.approx(full_kw * 0.48)
 
 
@@ -614,13 +614,13 @@ def test_setpoint_not_auto_clamped_when_staffing_drops():
 
     # Drop staffing AFTER all hire_to_fill hooks have run — they would
     # otherwise re-staff the refinery from the unemployed pool.
-    ref.staffed_jobs = 12  # eff = 0.48 → cap = 240
+    ref.staffed_jobs = 12  # eff = 0.48 → cap = 120
 
     w.step(days=1)
     s = w.state_dict()
     ref_state = next(t for t in s["tiles"] if t["type"] == "refinery")
     assert ref_state["setpoint_rate_bbl_day"] == REFINERY_MAX_BBL_DAY  # unchanged
-    # Throughput is capped at min(setpoint=500, eff_cap=240, available_crude).
+    # Throughput is capped at min(setpoint=250, eff_cap=120, available_crude).
     rate = w.state.wells[0].current_rate_bbl_day
     expected = min(REFINERY_MAX_BBL_DAY * (12 / 25), rate)
     assert ref_state["current_throughput_bbl_day"] == pytest.approx(expected)
@@ -672,10 +672,10 @@ def test_state_tiles_refinery_exposes_setpoint_and_throughput():
     th = next(t for t in w.state.tiles if t.type == "town_hall")
     w.build("refinery", th.x + 1, th.y)
     rid = next(t.id for t in w.state.tiles if t.type == "refinery")
-    w.control_refinery(rid, 320.0)
+    w.control_refinery(rid, 180.0)
     s = w.state_dict()
     refinery = next(t for t in s["tiles"] if t["type"] == "refinery")
-    assert refinery["setpoint_rate_bbl_day"] == 320.0
+    assert refinery["setpoint_rate_bbl_day"] == 180.0
     assert refinery["current_throughput_bbl_day"] == 0.0  # not yet stepped
 
 

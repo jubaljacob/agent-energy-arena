@@ -156,7 +156,7 @@ TILE_CATALOG: dict[str, TileSpec] = {
         capex=150_000,
         opex_per_day=300,
         requires_road=True,
-        description="+25 jobs. Up to 500 bbl/day. 200 kWh/bbl. 0.3 t CO2/bbl. Requires road.",
+        description="+25 jobs. Up to 250 bbl/day. 200 kWh/bbl. 0.3 t CO2/bbl. Requires road.",
         jobs=25,
     ),
     "oil_well": TileSpec(
