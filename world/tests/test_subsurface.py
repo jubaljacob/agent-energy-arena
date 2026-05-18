@@ -46,16 +46,26 @@ def test_reset_generates_3_to_7_blobs_seed42():
     assert N_RESERVOIRS_MIN <= N_RESERVOIRS_MAX  # sanity
 
 
-def test_seed42_total_ooip_in_expected_range():
-    """Total OOIP across all reservoirs falls in [500k, 1.5M] bbl on seed 42.
+def test_voxel_volume_bbl_is_56000():
+    """The economy-rebalance pass shrinks per-voxel oil by 20% so depletion
+    becomes a credible mid-to-late-game pressure within a typical play
+    horizon. Pin the constant so a future regression that walks it back
+    trips this test before the OOIP-range assertion below."""
+    assert VOXEL_VOLUME_BBL == 56_000.0
 
-    Post-rescale (VOXEL_VOLUME_BBL 700k → 70k) the OOIP range shifts 10×
-    downward so a 10-year game horizon produces legible depletion.
+
+def test_seed42_total_ooip_in_expected_range():
+    """Total OOIP across all reservoirs falls in [400k, 1.5M] bbl on seed 42.
+
+    Post-rescale (VOXEL_VOLUME_BBL 700k → 70k → 56k) the OOIP range shifts
+    downward so a 10-year game horizon produces legible depletion. The
+    economy-rebalance pass dropped the constant another 20% (70k → 56k),
+    moving the seed-42 total from ~777k to ~622k.
     """
     w = World()
     w.reset(seed=42)
     total_ooip = w.subsurface.total_oil_in_place()
-    assert 500_000 <= total_ooip <= 1_500_000, f"OOIP={total_ooip:,.0f} out of [500k, 1.5M]"
+    assert 400_000 <= total_ooip <= 1_500_000, f"OOIP={total_ooip:,.0f} out of [400k, 1.5M]"
 
 
 def test_reservoir_generation_reproducible_same_seed():

@@ -22,12 +22,13 @@ import numpy as np
 # Q_MAX_WELL_BBL_DAY = 200 a single producer drains <5% of a typical
 # 36-voxel reservoir over a 10-year game — the geology is undepletable
 # on the game's time horizon, so the depletion signal stays invisible to
-# both the player and the LLM agent. The reservoir-scale rescale drops
-# the constant 10× to 70_000, so per-voxel OIP becomes ~4k–17k bbl and
-# a 36-voxel reservoir holds ~300k bbl — exhaustible by an injection-
-# supported well within the game span. The HC-probability formula is
-# left unchanged from the brief.
-VOXEL_VOLUME_BBL = 70_000.0
+# both the player and the LLM agent. The reservoir-scale rescale dropped
+# the constant 10× to 70_000; the economy-rebalance pass then dropped it
+# another 20% to 56_000 so depletion becomes a credible mid-to-late-game
+# pressure within a typical play horizon (seed-42 total OOIP ~622k bbl,
+# down from ~777k). Reservoir geometry (blob count, radius range,
+# HC_PROBABILITY_BASE) is unchanged — only per-voxel volumetrics shrink.
+VOXEL_VOLUME_BBL = 56_000.0
 
 # Survey constants (§4.10 + oilfield-v2 §"Survey rescale": cost is
 # 15_000 × (size/4)² so a size-4 column costs $15k and a size-8 column
