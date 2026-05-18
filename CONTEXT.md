@@ -18,6 +18,19 @@ A subsurface object completed in a voxel `(x, y, target_z)`. Either a
 boost reservoir pressure). Lives in `state.wells`.
 _Avoid_: Borehole, Drill site
 
+**hourly_tick**:
+One hour of simulated World time. A day is `ticks_per_day` (=24) hourly
+ticks. Each tick determines this hour's demand (civilian load + injection /
+production well power draw + refinery process load), runs plant `dispatch`
+against that demand with one-hour-lagged DR, applies battery
+charge/discharge, computes the bus-level balance state, and yields the
+`prev_outputs`/`prev_balance` carried into the next tick. The tick is the
+unit shared between `World.step` (advances and mutates) and
+`world.preview.preview_next_day` (read-only projection of the next 24
+ticks).
+_Avoid_: Step (reserved for `World.step`, which advances ≥ 1 day), Update,
+Frame
+
 **state_view**:
 The external dict shape `World` returns to API consumers (UI, agent
 clients, tests) for a single `Tile` or `Well`. Distinct from the domain
@@ -30,6 +43,9 @@ _Avoid_: Serialized tile, Tile DTO, Wire format
 ## Relationships
 
 - A **World** contains many **Tiles** and many **Wells**.
+- A **World**'s day is `ticks_per_day` **hourly_tick**s; `World.step`
+  advances them and mutates state, while `preview_next_day` simulates the
+  next 24 ticks without mutation.
 - `World.state_dict()` returns a snapshot that includes one **state_view**
   per **Tile** and per **Well**.
 - **state_view** dicts compose values from `world/pricing.py` (per-facility

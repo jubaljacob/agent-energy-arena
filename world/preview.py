@@ -2,28 +2,27 @@
 
 `preview_next_day(world)` is a pure read-model over the current world
 state: it never mutates state and never consumes any RNG, so the UI
-can poll it on every `/state` tick. The projection mirrors the hourly
-loop in `world.sim.World.step` step-for-step, except weather is held at
-the natural deterministic baseline (current `cloud_factor`, seasonal
-wind `v_mean`) — the same truth-without-noise that
-`world.forecast._project_truth` uses. The balance-state chain feeds
+can poll it on every `/state` tick. The projection runs the same
+`world.hourly_tick.hourly_tick` that `World.step` runs each hour, except
+weather is held at the natural deterministic baseline (current
+`cloud_factor`, seasonal wind `v_mean`) — the same truth-without-noise
+that `world.forecast._project_truth` uses. The balance-state chain feeds
 back into DR-on-injection (`prev_balance`) and into ramp limits
 (`prev_plant_outputs`) so the 24-element trace matches what a quiet
 `/step` would produce given the same tile/well/refinery setpoints.
+
+Sharing `hourly_tick` with `World._advance_one_day` is load-bearing:
+any change to the hour's dispatch math (well power coupling, peaker
+filtering, battery netting, solar derate, ...) lands in both sim and
+preview at once. Before the seam existed, this module duplicated the
+hourly loop and drifted whenever a new dispatch input was added.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from world.economy import refinery_process_kw
-from world.power import (
-    PLANT_TYPES,
-    compute_balance_state,
-    dispatch,
-    total_demand_kw,
-)
-from world.subsurface import INJECTION_KWH_PER_BBL, Q_MAX_WELL_BBL_DAY
+from world.hourly_tick import hourly_tick
 from world.weather import v_mean
 
 if TYPE_CHECKING:
@@ -41,23 +40,19 @@ def preview_next_day(world: World) -> dict[str, Any]:
     cfg = world.config
 
     cloud = float(state.weather_now.get("cloud_factor", 0.85))
-    weather_proj = {
+    weather_proj: dict[str, float] = {
         "cloud_factor": cloud,
         "wind_speed_mps": float(v_mean(state.day, world.wind_phi_seed)),
     }
 
-    plants = [t for t in state.tiles if t.type in PLANT_TYPES]
-    # Carry the last completed hour's plant outputs into the projection so
-    # ramp limits read the same way the next `/step` would. Plants built
-    # since the last step are absent from this dict, which is exactly how
-    # `dispatch` would treat them (its `prev_outputs.get(..., default)`
-    # warm-starts coal at must-run and cold-starts gas at 0).
+    # Carry the last completed hour's plant outputs and balance into the
+    # projection so DR-on-injection, ramp limits, and producer shedding
+    # read the same way the next `/step` would. Plants built since the
+    # last step are absent from `prev_outputs`, which is exactly how
+    # `dispatch` treats them (warm-starts coal at must-run, cold-starts
+    # gas at 0).
     prev_outputs: dict[str, float] = dict(world._prev_plant_outputs)
-    prev_balance = state.power_now.get("balance_state", "balanced")
-
-    inj_wells = [w for w in state.wells if w.type == "injection"]
-    refineries = [t for t in state.tiles if t.type == "refinery" and t.operational]
-    inj_cap_kw = Q_MAX_WELL_BBL_DAY * INJECTION_KWH_PER_BBL / 24.0
+    prev_balance: str = state.power_now.get("balance_state", "balanced")
 
     demand_by_hour: list[float] = []
     supply_by_hour: list[float] = []
@@ -70,42 +65,14 @@ def preview_next_day(world: World) -> dict[str, Any]:
     }
 
     for h in range(cfg.ticks_per_day):
-        civilian_demand = total_demand_kw(state, h)
-
-        inj_kw = 0.0
-        for iw in inj_wells:
-            baseline_kw = iw.setpoint_rate_bbl_day * INJECTION_KWH_PER_BBL / 24.0
-            if prev_balance in ("brownout", "blackout"):
-                power_kw = 0.0
-            elif prev_balance == "curtailment":
-                power_kw = min(2.0 * baseline_kw, inj_cap_kw)
-            else:
-                power_kw = baseline_kw
-            inj_kw += power_kw
-
-        refinery_kw = sum(refinery_process_kw(t.current_throughput_bbl_day) for t in refineries)
-
-        demand_kw = civilian_demand + inj_kw + refinery_kw
-
-        outputs, supply_kw, by_source = dispatch(
-            plants,
-            demand_kw,
-            prev_outputs,
-            weather_proj,
-            state.day,
-            h,
-            fuel_cost_per_mwh=state.plant_fuel_cost_per_mwh,
-        )
-        balance, _served, _excess, _R = compute_balance_state(supply_kw, demand_kw)
-
-        demand_by_hour.append(float(demand_kw))
-        supply_by_hour.append(float(supply_kw))
-        balance_by_hour.append(balance)
+        result = hourly_tick(state, h, prev_outputs, prev_balance, weather_proj)
+        demand_by_hour.append(float(result.demand_kw))
+        supply_by_hour.append(float(result.supply_kw))
+        balance_by_hour.append(result.balance)
         for key in source_by_hour:
-            source_by_hour[key].append(float(by_source[key]))
-
-        prev_outputs = outputs
-        prev_balance = balance
+            source_by_hour[key].append(float(result.by_source[key]))
+        prev_outputs = result.outputs
+        prev_balance = result.balance
 
     peak_demand_kw = max(demand_by_hour) if demand_by_hour else 0.0
     peak_supply_kw = max(supply_by_hour) if supply_by_hour else 0.0
