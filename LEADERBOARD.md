@@ -8,7 +8,7 @@ Regenerate with `python -m arena.leaderboard` after `make baselines`. The commit
 
 | # | Agent | Mean Rank | Mean Score | Scenarios |
 |---|-------|-----------|------------|-----------|
-| 1 | agents.scripted | 1.00 | 0.3141 | scenarios.baseline, scenarios.economy_stress, scenarios.grid_stress |
+| 1 | agents.scripted | 1.00 | 0.2721 | scenarios.baseline, scenarios.economy_stress, scenarios.grid_stress |
 
 ## Submitting an agent
 

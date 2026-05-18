@@ -40,7 +40,7 @@ INDUSTRIAL_REVENUE_PER_DAY: float = 500.0
 # (radius 2) and earns capacity × occupancy × rate × efficiency. Calibrated
 # against the $50/day OPEX so a well-placed commercial near full-occupancy
 # housing nets a modest positive at full staffing.
-COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY: float = 1.0
+COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY: float = 2.0
 COMMERCIAL_RADIUS: int = 2
 
 

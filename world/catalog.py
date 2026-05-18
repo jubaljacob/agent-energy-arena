@@ -64,7 +64,7 @@ TILE_CATALOG: dict[str, TileSpec] = {
         requires_road=True,
         description=(
             "+12 jobs. 50 kW peak demand (8-20h, 20% otherwise). "
-            "Earns ~$1/resident/day from houses within 5×5 × occupancy × staffing. "
+            "Earns ~$2/resident/day from houses within 5×5 × occupancy × staffing. "
             "Requires road adjacency."
         ),
         jobs=12,

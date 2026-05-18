@@ -129,7 +129,7 @@ class WorldState:
     grid_price_retail: float = 0.08
     grid_price_export: float = 0.04
     industrial_revenue_per_day: float = 500.0
-    commercial_revenue_per_resident_per_day: float = 1.0
+    commercial_revenue_per_resident_per_day: float = 2.0
     daily_tax_per_capita: float = 4.0
     blackout_penalty_hour: float = 5000.0
     plant_fuel_cost_per_mwh: dict[str, float] = field(
