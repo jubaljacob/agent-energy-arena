@@ -16,6 +16,7 @@ import pytest
 from world.population import (
     DAILY_TAX_PER_CAPITA,
     HAPPINESS_NEUTRAL,
+    NEGATIVE_TREASURY_HAPPINESS_PENALTY,
     apply_structural_clamps,
     happiness_velocity,
     update_population,
@@ -520,6 +521,110 @@ def test_happiness_clipped_at_0_when_outage_extreme():
     w.state.yesterday_blackout_hours = 10_000.0
     update_population(w)
     assert w.state.happiness == pytest.approx(0.0)
+
+
+# -- Negative-treasury happiness penalty -----------------------------------
+
+
+def test_negative_treasury_penalty_constant_is_0_05():
+    """The penalty is a flat 0.05 happiness drop per day in the red."""
+    assert NEGATIVE_TREASURY_HAPPINESS_PENALTY == 0.05
+
+
+def test_positive_treasury_applies_no_penalty():
+    """Treasury >= 0 → happiness matches baseline (no penalty)."""
+    w = _fresh_world()
+    w.state.treasury = 1.0  # positive
+    update_population(w)
+    # Baseline: no parks, no noise, no outages, no coal → h=1.0.
+    assert w.state.happiness == pytest.approx(1.0)
+
+
+def test_zero_treasury_applies_no_penalty():
+    """Treasury exactly 0 is not negative → no penalty."""
+    w = _fresh_world()
+    w.state.treasury = 0.0
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0)
+
+
+def test_negative_treasury_drops_happiness_by_exactly_0_05():
+    """Treasury < 0 → exactly 0.05 subtracted before the [0, 1.5] clamp."""
+    w = _fresh_world()
+    w.state.treasury = -1.0
+    update_population(w)
+    assert w.state.happiness == pytest.approx(0.95)
+
+
+def test_negative_treasury_penalty_does_not_scale_with_depth():
+    """Penalty is flat: -$1 and -$1,000,000 produce the same 0.05 drop."""
+    w_shallow = _fresh_world()
+    w_shallow.state.treasury = -1.0
+    update_population(w_shallow)
+
+    w_deep = _fresh_world()
+    w_deep.state.treasury = -1_000_000.0
+    update_population(w_deep)
+
+    assert w_shallow.state.happiness == pytest.approx(w_deep.state.happiness)
+    assert w_deep.state.happiness == pytest.approx(0.95)
+
+
+def test_negative_treasury_penalty_does_not_scale_with_duration():
+    """Sustained negative treasury → same flat 0.05 every day (no accumulation)."""
+    w = _fresh_world()
+    # Park keeps things lively; tax revenue is small so treasury stays negative.
+    _inject_tile(w, type="commercial", x=5, y=5, jobs=10_000, housing_capacity=10_000)
+    w.state.population = 100.0
+    w.state.treasury = -1_000_000.0  # deep enough that tax can't recover it in 10 days
+
+    for _ in range(10):
+        update_population(w)
+        assert w.state.happiness == pytest.approx(0.95)
+
+
+def test_negative_to_nonnegative_transition_removes_penalty_immediately():
+    """The day treasury returns >= 0, the penalty is gone — no lingering effect."""
+    w = _fresh_world()
+    w.state.treasury = -1.0
+    update_population(w)
+    assert w.state.happiness == pytest.approx(0.95)
+
+    # Treasury back in the black on the next day.
+    w.state.treasury = 100.0
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0)
+
+
+def test_negative_treasury_penalty_applied_before_lower_clamp():
+    """Penalty fires before the [0, 1.5] clamp, not after.
+
+    With an extreme outage that already pins happiness below zero, the
+    penalty's contribution disappears into the clamp at 0.0 — it does not
+    push happiness negative.
+    """
+    w = _fresh_world()
+    w.state.treasury = -1.0
+    w.state.yesterday_blackout_hours = 10_000.0
+    update_population(w)
+    assert w.state.happiness == pytest.approx(0.0)
+
+
+def test_negative_treasury_penalty_applied_before_upper_clamp():
+    """At the upper clamp boundary, a -0.05 step is visible (it doesn't
+    silently push above the cap)."""
+    w = _fresh_world()
+    _inject_tile(w, type="house", x=0, y=0, housing_capacity=10)
+    # Four parks within cheb-2 → +0.30 (capped). h_raw = 1.30.
+    _inject_tile(w, type="park", x=1, y=1)
+    _inject_tile(w, type="park", x=2, y=2)
+    _inject_tile(w, type="park", x=-1, y=-1)
+    _inject_tile(w, type="park", x=-2, y=-2)
+    w.state.treasury = -1.0
+
+    update_population(w)
+    # 1.30 - 0.05 = 1.25, well inside the cap.
+    assert w.state.happiness == pytest.approx(1.25)
 
 
 # -- State surface -----------------------------------------------------------

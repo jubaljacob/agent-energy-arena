@@ -35,6 +35,11 @@ DAILY_TAX_PER_CAPITA: float = 4.0
 BLACKOUT_HAPPINESS_PER_HOUR: float = 0.05
 BROWNOUT_HAPPINESS_PER_HOUR: float = 0.02
 
+# Flat daily happiness penalty when the day closes with treasury < 0.
+# Does not scale with depth or duration; disappears the day treasury
+# returns non-negative.
+NEGATIVE_TREASURY_HAPPINESS_PENALTY: float = 0.05
+
 # Velocity model anchors (PRD §"Implementation Decisions").
 HAPPINESS_NEUTRAL: float = 1.0
 
@@ -118,6 +123,8 @@ def update_population(world: World) -> None:
     happiness -= BLACKOUT_HAPPINESS_PER_HOUR * state.yesterday_blackout_hours
     happiness -= BROWNOUT_HAPPINESS_PER_HOUR * state.yesterday_brownout_hours
     happiness -= 0.05 * coal_houses_within_3 / max(1, house_count)
+    if state.treasury < 0:
+        happiness -= NEGATIVE_TREASURY_HAPPINESS_PENALTY
     happiness = max(0.0, min(1.5, happiness))
 
     pop_before = float(state.population)
