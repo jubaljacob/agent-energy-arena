@@ -1176,6 +1176,38 @@
 
   if (prevDayBtn) prevDayBtn.addEventListener("click", () => peekStep(-1));
 
+  const resetBtn = document.getElementById("reset-btn");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", async () => {
+      if (isReplay()) return;
+      resetBtn.disabled = true;
+      try {
+        const res = await fetch("/reset", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (!res.ok) {
+          let detail = "";
+          try {
+            const body = await res.json();
+            detail = body.detail || "";
+          } catch (err) {
+            // ignore
+          }
+          showToast(`reset rejected: ${detail || res.status}`, "error");
+          return;
+        }
+        clearPeek();
+        await tick();
+      } catch (err) {
+        showToast(`network error: ${err}`, "error");
+      } finally {
+        resetBtn.disabled = false;
+      }
+    });
+  }
+
   // Tab switching ---------------------------------------------------------
   const tabButtons = document.querySelectorAll(".tab");
   const tabPanels = document.querySelectorAll(".tabpanel");
@@ -1612,7 +1644,7 @@
       ["OPEX", -(summary.opex || 0), "-"],
       ["Fuel cost", -(summary.fuel_cost || 0), "-"],
       ["Carbon cost", -(summary.carbon_cost || 0), "-"],
-      ["Blackout penalty", -(summary.blackout_penalty || 0), "-"],
+      ["Outage penalty", -(summary.outage_penalty || 0), "-"],
     ];
     for (const [label, value, sign] of rows) {
       const li = document.createElement("li");
@@ -2034,6 +2066,8 @@
     // In replay mode, the replay bar has its own back button; hide this one.
     prevDayBtn.disabled = isReplay() || (isPeeking() ? peekDay <= 0 : lastLiveDay <= 0);
     prevDayBtn.textContent = isPeeking() ? `◀ Prev Day (peeking ${peekDay})` : "◀ Prev Day";
+    const resetBtnEl = document.getElementById("reset-btn");
+    if (resetBtnEl) resetBtnEl.disabled = isReplay();
   }
 
   async function peekStep(delta) {

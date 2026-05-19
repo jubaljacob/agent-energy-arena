@@ -173,6 +173,28 @@ def test_state_history_returns_recorded_day(tmp_path: Path) -> None:
     assert r.status_code == 404
 
 
+def test_reset_with_empty_body_preserves_seed_and_resets_day(tmp_path: Path) -> None:
+    """The UI's top-bar Reset button POSTs `/reset` with an empty body. The
+    backend must treat the absent `seed` field as "preserve the active seed"
+    and still drop the day counter to 0."""
+    client, _ = _client(tmp_path)
+
+    client.post("/reset", json={"seed": 123})
+    client.post("/step", json={"days": 5})
+    assert client.get("/state").json()["day"] == 5
+    seed_before = client.get("/seed").json()["seed"]
+
+    r = client.post("/reset", json={})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["result"]["day"] == 0
+    assert body["result"]["seed"] == seed_before
+
+    assert client.get("/state").json()["day"] == 0
+    assert client.get("/seed").json()["seed"] == seed_before
+
+
 def test_state_history_404s_without_recorder(tmp_path: Path) -> None:
     """When the world has no recorder (tests, embedded use), /state/history
     returns 404 with a clear detail string rather than raising 500."""

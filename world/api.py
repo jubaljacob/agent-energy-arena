@@ -278,7 +278,7 @@ def create_app(
     runs_root: str = "runs",
     agent_repo_root: Path | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Energy-AI Nexus", version="0.1.0")
+    app = FastAPI(title="Agent Energy Arena", version="0.1.0")
 
     # When no World is provided, allocate one wired to the canonical
     # `runs/` root so the recorder (slice 03) writes metadata + per-day
@@ -562,9 +562,13 @@ def create_app(
             except (ImportError, ValueError) as exc:
                 app.state.action_log.append("/reset", params, ok=False, error=str(exc))
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # An empty body (no `seed` field) preserves the currently active
+        # seed rather than reverting to the world's configured default,
+        # so the UI's top-bar Reset button is a "wipe but keep seed" action.
+        seed_to_use = body.seed if body.seed is not None else app.state.world.state.seed
         try:
             app.state.world.reset(
-                seed=body.seed,
+                seed=seed_to_use,
                 scenario=scenario_instance,
                 scenario_dotted_path=body.scenario if scenario_instance else None,
             )
