@@ -78,18 +78,20 @@ class LLMReactAgent(BaseAgent):
 
     # -- Attach hook ------------------------------------------------------
 
-    def act(self, state: dict[str, Any]) -> None:
+    def act(self, state: dict[str, Any]) -> int | None:
         """Per-`/step` hook used when the agent is attached via Agent Play.
 
         One LLM call per turn: summarise the world, ask the model,
         dispatch every non-`step` tool call. The surrounding `/step`
-        handler advances the clock once this returns. The
-        cumulative-token counter and the 80%-of-1M budget warning
-        carry over from CLI mode — attach mode shares the same budget
-        envelope, just spread across UI turns instead of `decide()`
-        calls.
+        handler advances the clock once this returns; the model's
+        `step(days=N)` propagates back as a skip cooldown so a
+        thinking agent doesn't have to fire on every UI tick — see
+        `agents.attach_runtime.drive_one_turn`. The cumulative-token
+        counter and the 80%-of-1M budget warning carry over from CLI
+        mode — attach mode shares the same budget envelope, just
+        spread across UI turns instead of `decide()` calls.
         """
-        usage = drive_one_turn(
+        usage, skip_days = drive_one_turn(
             self.api,
             state,
             self.llm,
@@ -98,6 +100,7 @@ class LLMReactAgent(BaseAgent):
             max_tokens=self.max_tokens_per_turn,
         )
         self._record_usage(usage.total)
+        return skip_days
 
     def _record_usage(self, tokens: int) -> None:
         """Shared token-accounting tail used by both `decide` (CLI) and

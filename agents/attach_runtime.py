@@ -7,23 +7,31 @@ explicit override both agents inherit the no-op `BaseAgent.act` — so
 attached they contribute nothing. `drive_one_turn` is what each
 agent's `act()` delegates to: one LLM call per attach-mode `/step`
 that summarises the world, asks the model, and dispatches every
-non-`step` tool call it emits. The `step` tool is silently dropped —
-the surrounding `/step` handler is the only place that may advance
-the clock in attach mode.
+non-`step` tool call it emits.
+
+`drive_one_turn` never calls `api.step` itself — `UiAgentApiClient`
+forbids that during attach so the action log's per-day slicing stays
+intact. Instead it captures the `days` arg from the model's `step`
+tool call and returns it: the surrounding `/step` handler uses that
+to skip the next N-1 `act()` invocations while the human's play
+timer keeps ticking. A model that emits no `step` returns `None`,
+meaning "wake me every step" — the existing behavior.
 
 `drive_one_turn` uses only `api.build`, `api.demolish`, `api.survey`,
 `api.drill`, `api.control_well`, `api.control_refinery`, and the read
 methods on `ApiClient` — every mutator that `UiAgentApiClient` still
-permits during attach. It never calls `api.step` / `api.reset` /
-`api.attach_scenario`, which the attach client guards against.
+permits during attach.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import sys
+from typing import Any, TextIO
 
 from agents.llm import LLMClient, ToolCall, Usage
 from agents.state_summary import summarize_state
+
+_DEFAULT_STEP_DAYS_FALLBACK: int = 7
 
 
 def drive_one_turn(
@@ -35,19 +43,27 @@ def drive_one_turn(
     action_tools: list[dict[str, Any]],
     max_tokens: int = 2048,
     forecast_hours: int = 24,
-) -> Usage:
+    log_stream: TextIO | None = None,
+) -> tuple[Usage, int | None]:
     """One LLM call's worth of mutations against the attached world.
 
-    Mirrors `LLMReactAgent.decide` minus the `step` tool: the human
-    owns the clock in attach mode, so a `step` from the model is
-    silently discarded (and would raise from `UiAgentApiClient.step`
-    even if we tried to honour it). Every other tool call is
-    dispatched in order; malformed args or world-side rejections
-    (`tile_occupied`, `insufficient_funds`, …) are swallowed so a bad
-    suggestion from the model doesn't crash the turn.
+    Mirrors `LLMReactAgent.decide` minus the direct `step` dispatch:
+    the human owns the clock in attach mode, so a `step` call from
+    the model is read for its `days` argument and otherwise dropped
+    (calling `api.step` would raise from `UiAgentApiClient.step`).
+    Every other tool call is dispatched in order; malformed args or
+    world-side rejections (`tile_occupied`, `insufficient_funds`, …)
+    are swallowed so a bad suggestion from the model doesn't crash
+    the turn.
 
-    Returns the LLM's `Usage` so callers can maintain a cumulative
-    token counter (and fire whatever budget warning they like).
+    Returns `(usage, skip_days)`:
+      - `usage` is the LLM's token accounting so callers can
+        maintain a cumulative counter.
+      - `skip_days` is the clamped (1..7) `days` from the first
+        `step` tool call the model emitted, or `None` when the
+        model emitted no `step`. The `/step` handler interprets
+        `None` as "act every step" and an int `N` as "act now,
+        skip the next N-1 steps."
     """
     forecast = _safe_forecast(api, forecast_hours)
     user_msg = summarize_state(state, forecast)
@@ -57,20 +73,87 @@ def drive_one_turn(
         tools=action_tools,
         max_tokens=max_tokens,
     )
+    skip_days: int | None = None
+    dispatched: list[tuple[str, bool]] = []  # (one-line summary, ok)
     for call in response.tool_calls:
         if call.name == "step":
-            # Human owns the clock in attach mode. Ignore and continue —
-            # any tool calls AFTER `step` still represent valid intent
-            # from the model and we'd rather dispatch than drop them.
+            # Capture the first step's days as the requested skip
+            # interval; drop the tool call itself (the surrounding
+            # /step handler owns clock advancement). Subsequent
+            # non-step tool calls still dispatch — see module
+            # docstring for the rationale.
+            if skip_days is None:
+                skip_days = _clamp_days(call.arguments.get("days"))
             continue
+        ok = True
         try:
             _dispatch_one(api, call)
         except (RuntimeError, KeyError, TypeError, ValueError):
             # RuntimeError covers the world's 4xx envelopes via ApiClient's
             # raise-on-error parsing; KeyError/TypeError/ValueError cover
             # malformed model arguments (missing field, wrong shape).
-            continue
-    return response.usage
+            ok = False
+        dispatched.append((_summarise_call(call), ok))
+    _log_turn(
+        log_stream if log_stream is not None else sys.stderr,
+        state=state,
+        dispatched=dispatched,
+        skip_days=skip_days,
+    )
+    return response.usage, skip_days
+
+
+def _summarise_call(call: ToolCall) -> str:
+    """One-line, log-friendly rendering of a tool call. Keeps the
+    args terse so a fast UI play with many tool calls/turn doesn't
+    drown the terminal."""
+    a = call.arguments
+    name = call.name
+    try:
+        if name == "build":
+            return f"build({a['tile_type']}, {a['x']},{a['y']})"
+        if name == "demolish":
+            return f"demolish({a['x']},{a['y']})"
+        if name == "survey":
+            return f"survey({a['x']},{a['y']}, size={a.get('size', 8)})"
+        if name == "drill":
+            return f"drill({a['x']},{a['y']},z={a['target_z']}, {a.get('well_type', 'production')})"
+        if name == "set_well_rate":
+            return f"set_well_rate({a['well_id']}, {a['rate_bbl_day']})"
+        if name == "set_refinery_rate":
+            return f"set_refinery_rate({a['refinery_id']}, {a['rate_bbl_day']})"
+    except (KeyError, TypeError):
+        pass
+    return f"{name}({a!r})"
+
+
+def _log_turn(
+    stream: TextIO,
+    *,
+    state: dict[str, Any],
+    dispatched: list[tuple[str, bool]],
+    skip_days: int | None,
+) -> None:
+    """Single-line per-turn summary. Format:
+
+    [agent day=12] build(road, 5,8); drill(7,9,z=1200,production) (rejected); skip=3
+    """
+    day = state.get("day", "?")
+    if dispatched:
+        parts = [s if ok else f"{s} (rejected)" for s, ok in dispatched]
+        actions = "; ".join(parts)
+    else:
+        actions = "(no actions)"
+    skip = "every step" if skip_days is None else f"{skip_days}d"
+    print(f"[agent day={day}] {actions}; skip={skip}", file=stream, flush=True)
+
+
+def _clamp_days(raw: Any) -> int:
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_STEP_DAYS_FALLBACK
+    return max(1, min(7, days))
 
 
 def _safe_forecast(api: Any, hours: int) -> list[dict[str, Any]] | None:

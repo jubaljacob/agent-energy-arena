@@ -686,3 +686,100 @@ def test_attach_switches_sys_path_when_folder_changes(tmp_path: Path) -> None:
 
     client.post("/agent/detach", json={})
     assert beta_path not in sys.path
+
+
+# -- Skip cooldown: agent.act may return N to skip the next N-1 /step ------
+
+
+def _write_counting_agent(tmp_path: Path, name: str, skip_return: str) -> None:
+    """Drop an agent that appends a marker to /tmp on every act() call and
+    returns `skip_return` (a Python expression evaluated at act-time)."""
+    marker = tmp_path / f"{name}.calls"
+    _write_agent(
+        tmp_path / name,
+        f"""
+        from agents.base import BaseAgent
+        class Agent(BaseAgent):
+            def act(self, state):
+                with open({str(marker)!r}, "a") as f:
+                    f.write(f"{{state['day']}}\\n")
+                return {skip_return}
+        """,
+    )
+
+
+def _calls_for(tmp_path: Path, name: str) -> list[int]:
+    p = tmp_path / f"{name}.calls"
+    if not p.exists():
+        return []
+    return [int(line) for line in p.read_text().splitlines() if line.strip()]
+
+
+def test_attached_act_returning_none_runs_every_step(tmp_path: Path) -> None:
+    """Default behavior: an agent whose `act` returns `None` (the
+    `BaseAgent` default) is invoked on every `/step`."""
+    _write_counting_agent(tmp_path, "everystep", "None")
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    client.post("/reset", json={"seed": 42})
+    client.post("/agent/attach", json={"folder": "everystep"})
+
+    for _ in range(4):
+        assert client.post("/step", json={"days": 1}).status_code == 200
+
+    assert _calls_for(tmp_path, "everystep") == [0, 1, 2, 3]
+
+
+def test_attached_act_returning_int_skips_intervening_steps(tmp_path: Path) -> None:
+    """An agent that returns N=3 from `act` should be invoked once,
+    then skipped on the next two `/step` calls, then invoked again
+    on the third. Skipped /steps still advance the world clock."""
+    _write_counting_agent(tmp_path, "skipper", "3")
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    client.post("/reset", json={"seed": 42})
+    client.post("/agent/attach", json={"folder": "skipper"})
+
+    for _ in range(7):
+        assert client.post("/step", json={"days": 1}).status_code == 200
+
+    # act() fires on days 0, 3, 6 — three days between consecutive calls.
+    assert _calls_for(tmp_path, "skipper") == [0, 3, 6]
+    # World clock advanced on every step, regardless of whether act ran.
+    assert client.get("/state").json()["day"] == 7
+
+
+def test_attached_act_skip_cooldown_consumes_body_days(tmp_path: Path) -> None:
+    """If the UI steps `days>1` at once, the cooldown decrements by
+    that many days. An agent returning N=3 stepped at `days=2` is
+    invoked again the very next step (1 day of cooldown left → eaten
+    by `days=2`), not held for two more steps."""
+    _write_counting_agent(tmp_path, "bigstep", "3")
+    client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    client.post("/reset", json={"seed": 42})
+    client.post("/agent/attach", json={"folder": "bigstep"})
+
+    # Step 1 (day 0→2): act fires, returns 3 → cooldown = 3-2 = 1.
+    # Step 2 (day 2→4): cooldown 1 > 0 → skip act, cooldown = max(0, 1-2) = 0.
+    # Step 3 (day 4→6): act fires again.
+    for _ in range(3):
+        assert client.post("/step", json={"days": 2}).status_code == 200
+
+    assert _calls_for(tmp_path, "bigstep") == [0, 4]
+
+
+def test_reattach_clears_skip_cooldown(tmp_path: Path) -> None:
+    """A leftover cooldown from a prior attach must not silence the
+    new agent's first `act()` after re-attach."""
+    _write_counting_agent(tmp_path, "leaver", "7")
+    _write_counting_agent(tmp_path, "joiner", "None")
+    client, app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
+    client.post("/reset", json={"seed": 42})
+
+    client.post("/agent/attach", json={"folder": "leaver"})
+    client.post("/step", json={"days": 1})
+    # The previous attach left cooldown > 0.
+    assert int(app.state.agent_skip_remaining) > 0
+
+    client.post("/agent/attach", json={"folder": "joiner"})
+    assert int(app.state.agent_skip_remaining) == 0
+    client.post("/step", json={"days": 1})
+    assert _calls_for(tmp_path, "joiner") == [1]

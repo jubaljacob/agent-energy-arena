@@ -220,6 +220,7 @@ def _detach_agent(app: FastAPI) -> None:
     app.state.attached_agent = None
     app.state.attached_agent_folder = None
     app.state.attached_agent_folder_path = None
+    app.state.agent_skip_remaining = 0
 
 
 def _slice_actions_for_day(entries: list[dict[str, Any]], day: int) -> dict[str, Any]:
@@ -306,6 +307,11 @@ def create_app(
     app.state.attached_agent = None
     app.state.attached_agent_folder = None
     app.state.attached_agent_folder_path = None
+    # Agent Play skip cooldown: an attached `act()` may return `N` to say
+    # "act now, skip the next N-1 /step calls." The /step handler decrements
+    # this by `body.days` each tick and only re-invokes `act` when it hits 0.
+    # `None` return → counter stays 0 (act every step, today's behavior).
+    app.state.agent_skip_remaining = 0
     app.state._agent_repo_root = (
         agent_repo_root if agent_repo_root is not None else DEFAULT_AGENT_REPO_ROOT
     )
@@ -472,6 +478,8 @@ def create_app(
         app.state.attached_agent = instance
         app.state.attached_agent_folder = body.folder
         app.state.attached_agent_folder_path = folder_path
+        # Fresh attach: clear any stale cooldown from a prior agent.
+        app.state.agent_skip_remaining = 0
         return {"ok": True, "folder": body.folder}
 
     @app.post("/agent/detach")
@@ -595,15 +603,37 @@ def create_app(
         # does not advance, so the edit-fix-retry loop stays cheap. This is
         # also the path that catches `RuntimeError` from `UiAgentApiClient`'s
         # clock-method guards (agent calling `self.api.step()` from `act()`).
+        #
+        # Skip cooldown: if the previous `act()` returned N>1, we owe
+        # the agent (N-1) silent steps before calling it again. The
+        # play timer can keep ticking the world clock at native speed
+        # while a slow LLM model only fires once every N days.
         attached_agent = getattr(app.state, "attached_agent", None)
         if attached_agent is not None:
-            try:
-                attached_agent.act(app.state.world.state_dict())
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"agent.act raised: {exc!r}",
-                ) from exc
+            skip_remaining = int(getattr(app.state, "agent_skip_remaining", 0))
+            if skip_remaining > 0:
+                app.state.agent_skip_remaining = max(0, skip_remaining - body.days)
+                print(
+                    f"[agent day={app.state.world.state.day}] (skipped, "
+                    f"{app.state.agent_skip_remaining}d cooldown left)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            else:
+                try:
+                    requested = attached_agent.act(app.state.world.state_dict())
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"agent.act raised: {exc!r}",
+                    ) from exc
+                # `None` → wake me every step (today's default). An int
+                # `N` is clamped 1..7 by `drive_one_turn`; we owe N-1
+                # silent steps after this one. We've already consumed
+                # `body.days` worth of this step's "budget" by acting
+                # now, so subtract that from the upcoming cooldown.
+                if requested is not None:
+                    app.state.agent_skip_remaining = max(0, int(requested) - body.days)
         try:
             summary = app.state.world.step(days=body.days)
             result = {

@@ -47,8 +47,23 @@ class BaseAgent:
 
     # -- Override points --------------------------------------------------
 
-    def act(self, state: dict[str, Any]) -> None:
-        """Submit zero or more actions for the current day. No-op by default."""
+    def act(self, state: dict[str, Any]) -> int | None:
+        """Submit zero or more actions for the current day.
+
+        Return value drives the Agent Play attach-mode skip cooldown
+        (see `world.api.post_step`):
+
+          - `None` (default) — wake me on every `/step`.
+          - `N` (int, 1..7) — act now, then skip the next N-1
+            `/step`s; the surrounding handler keeps advancing the
+            world clock during those skipped days while the play
+            timer ticks at the UI's native cadence.
+
+        The base no-op returns `None` so trivial agents keep their
+        every-step behavior. CLI mode (`play_game`) ignores the
+        return value — it owns the clock via `next_step_days`.
+        """
+        return None
 
     def next_step_days(self, state: dict[str, Any]) -> int:
         """Default: weekly cadence."""

@@ -111,7 +111,7 @@ class LangGraphAgent(BaseAgent):
 
     # -- Attach hook ------------------------------------------------------
 
-    def act(self, state: dict[str, Any]) -> None:
+    def act(self, state: dict[str, Any]) -> int | None:
         """Per-`/step` hook used in Agent Play attach mode.
 
         The graph runs in CLI mode only — its `observe → summarise →
@@ -119,9 +119,11 @@ class LangGraphAgent(BaseAgent):
         the clock. Attach mode skips the graph and runs the same one-
         LLM-call-per-turn loop as `LLMReactAgent.act`: ask the model
         what to do, dispatch every non-`step` tool call, let the
-        human's `/step` handler advance the clock.
+        human's `/step` handler advance the clock. The model's
+        `step(days=N)` tool call propagates back as a skip cooldown —
+        see `agents.attach_runtime.drive_one_turn`.
         """
-        usage = drive_one_turn(
+        usage, skip_days = drive_one_turn(
             self.api,
             state,
             self.llm,
@@ -130,6 +132,7 @@ class LangGraphAgent(BaseAgent):
             max_tokens=self.max_tokens_per_turn,
         )
         self.cumulative_tokens += usage.total
+        return skip_days
 
     # -- Graph construction ----------------------------------------------
 
