@@ -34,18 +34,24 @@ import argparse
 import contextlib
 import importlib
 import json
-import math
 import os
 import sys
 from pathlib import Path
 from typing import Any
 
-from agents.api_client import ApiClient
-from agents.base import BaseAgent
-from world.action_log import ActionLog
-from world.api import BASELINES_DIR, create_app
-from world.scenario import load_scenario
-from world.sim import World
+from dotenv import load_dotenv
+
+# Load `.env` from the repo root before importing anything that reads
+# env vars. This lets users keep LLM_PROVIDER / LLM_API_KEY /
+# NVIDIA_API_KEY etc. in `.env` instead of exporting them in every shell.
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+from agents.api_client import ApiClient  # noqa: E402
+from agents.base import BaseAgent  # noqa: E402
+from world.action_log import ActionLog  # noqa: E402
+from world.api import create_app  # noqa: E402
+from world.scenario import load_scenario  # noqa: E402
+from world.sim import World  # noqa: E402
 
 
 def _load_agent_class(module_name: str) -> type[BaseAgent]:
@@ -86,43 +92,6 @@ def _make_inprocess_client(
     log = ActionLog(root=root, run_id=run_id)
     app = create_app(world=world, action_log=log)
     return ApiClient(transport=TestClient(app)), world, log
-
-
-def _score_breakdown(final_state: dict[str, Any], seed: int) -> dict[str, Any] | None:
-    """Recompute the /score breakdown from a captured final_state dict.
-
-    Mirrors world.scoring.score so we don't need a live World handle in
-    the HTTP path.  Returns None if no baseline file exists for the
-    seed (matches the /score 404 contract).
-    """
-    baseline_path = BASELINES_DIR / f"seed_{seed}.json"
-    if not baseline_path.exists():
-        return None
-    payload = json.loads(baseline_path.read_text())
-    p_ref = float(payload["p_ref"])
-    t_ref = float(payload["t_ref"])
-
-    starting_cash = float(final_state["config"]["starting_cash"])
-    P = float(final_state["population"])
-    T = float(final_state["treasury"]) - starting_cash
-    total_kwh = float(final_state.get("cumulative_total_served_kwh", 0.0))
-    renewable_kwh = float(final_state.get("cumulative_renewable_served_kwh", 0.0))
-    R = renewable_kwh / max(total_kwh, 1.0)
-
-    p_term = 0.5 * min(P / max(p_ref, 1.0), 3.0)
-    t_term = 0.4 * 0.5 * (1.0 + math.tanh(T / max(t_ref, 1.0)))
-    r_term = 0.1 * R
-    return {
-        "P": P,
-        "P_ref": p_ref,
-        "p_term": p_term,
-        "T": T,
-        "T_ref": t_ref,
-        "t_term": t_term,
-        "R": R,
-        "r_term": r_term,
-        "score": p_term + t_term + r_term,
-    }
 
 
 def _dispatch(api: ApiClient, endpoint: str, params: dict[str, Any]) -> Any:
@@ -191,12 +160,11 @@ def cmd_eval(module_name: str, seed: int, api_url: str | None, scenario: str | N
         json.dumps(final_state, sort_keys=True, default=str) + "\n"
     )
 
-    breakdown = _score_breakdown(final_state, seed)
     line = {
         "agent": module_name,
         "seed": seed,
         "run_id": run_dir.name,
-        "score": breakdown,
+        "score": api.score(),
     }
     print(json.dumps(line))
     return 0

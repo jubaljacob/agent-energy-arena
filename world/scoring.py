@@ -1,72 +1,236 @@
-"""End-of-game scoring (PRD §"Scoring", brief §8.1 with PRD revisions).
+"""Pure `trend_aware` scoring formula. Operates on per-day snapshot dicts.
 
-The score is a weighted sum of three independent terms:
+The headline score in [0, 100] decomposes treasury, population, and
+happiness into a level / trend / trough triple per axis, then adds a
+renewable-share term and a solvency term. See `.scratch/scoring/PRD.md`
+for the motivation and the load-bearing formula choices (treasury
+utility offset by starting cash; treasury trend via linear slope rather
+than CAGR).
 
-  P     = world.population
-  T     = world.treasury - STARTING_CASH
-  R     = cumulative_renewable_served_kwh / max(cumulative_total_served_kwh, 1)
+This module is intentionally I/O-free and has no imports of
+`world.sim` or `world.state`. The same `compute_score` function is
+called from the HTTP handler today and can be called from an offline
+rescoring CLI tomorrow without refactor.
 
-  p_term = 0.5 * min(P / max(P_ref, 1), 3.0)              # capped at 1.5
-  t_term = 0.4 * 0.5 * (1 + tanh(T / max(T_ref, 1)))      # in [0, 0.4]
-  r_term = 0.1 * R                                         # in [0, 0.1]
-
-  score  = p_term + t_term + r_term
-
-P_ref / T_ref come from the scripted-agent baseline run on the same seed
-(slice 14 generates `baselines/seed_{N}.json`). The renewable share is a
-lifetime running sum maintained on WorldState; curtailed kWh exported to
-the external grid is excluded from both numerator and denominator.
-
-`score()` is a pure read-only function — it consumes a fully-played
-World plus the two baseline references and returns the breakdown dict
-the API layer surfaces directly.
+Scale anchors are module-level constants — tunable after the maintainer
+plays a few real runs, without spelunking through the math.
 """
 
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from world.sim import World
+# Utility tanh anchor on `treasury - starting_cash`. A delta of one
+# anchor's worth of cash lands utility ~0.88; ten anchors saturates.
+TREASURY_SCALE: float = 5_000_000.0
 
-P_TERM_WEIGHT: float = 0.5
-P_TERM_CAP: float = 3.0
-T_TERM_WEIGHT: float = 0.4
-R_TERM_WEIGHT: float = 0.1
+# Trend tanh anchor on slope-per-day of `treasury - starting_cash`.
+# Roughly TREASURY_SCALE / 365 so "$5M of growth per year" lands trend
+# near 0.96.
+TREASURY_TREND_SCALE: float = 13_700.0
+
+# Asymptote of u_pop: 1 - exp(-p / POP_TARGET). u_pop(POP_TARGET) ≈ 0.63.
+POP_TARGET: float = 1000.0
+
+# u_happy clips happiness into [0, HAPPINESS_CEIL] and rescales to [0, 1].
+HAPPINESS_CEIL: float = 1.2
+
+# Daily-CAGR tanh anchors for population and happiness trend terms.
+# A daily CAGR of one anchor's worth lands trend ~0.88.
+CAGR_SCALE_POP: float = 0.003
+CAGR_SCALE_HAPPY: float = 0.001
+
+# CVaR fraction for the trough term. The mean of the lowest
+# `ceil(alpha * N)` values feeds u_a.
+CVAR_ALPHA: float = 0.05
+
+# Renewable share at which the `R` term hits full credit. Linear ramp
+# from 0 to RENEWABLE_TARGET, clamped to 1.0 above. The asymmetric
+# saturation reflects that scenarios with weather-driven outages make
+# a 100%-renewable build genuinely worse than a 50% mix with peakers;
+# the score should not push the agent past the resilience knee. See
+# ADR-0005.
+RENEWABLE_TARGET: float = 0.5
+
+# Trailing window (fraction of total days) used by the trend term to
+# credit a signal that has saturated at its utility ceiling. A signal
+# stuck at the top has zero CAGR, so the raw growth term collapses to
+# 0.5 — the recent-window utility takes over and credits "stayed at
+# the top," which is the best possible time series. `n // 4` keeps the
+# fix from being a final-day windfall.
+RECENT_WINDOW_FRACTION: float = 0.25
+
+_AXIS_LEVEL_WEIGHT = 0.4
+_AXIS_TREND_WEIGHT = 0.4
+_AXIS_TROUGH_WEIGHT = 0.2
+
+_W_AXIS_TREASURY = 0.30
+_W_AXIS_POP = 0.30
+_W_AXIS_HAPPY = 0.20
+_W_R = 0.10
+_W_SOLVENCY = 0.10
+
+_EPS = 1e-9
+
+_EMPTY_PAYLOAD: dict[str, Any] = {"n_days": 0, "score": 0.0, "components": {}}
 
 
-def score(world: World, p_ref: float, t_ref: float) -> dict[str, Any]:
-    """Compute the three-term scoring breakdown for a finished game.
+def compute_score(snapshots: list[dict[str, Any]], starting_cash: float) -> dict[str, Any]:
+    """Compute the trend-aware score and component breakdown.
 
-    `p_ref` and `t_ref` come from the scripted-agent baseline file for
-    the active seed. The function caps the population term at 3× the
-    reference per PRD §"Scoring" and saturates the treasury term via
-    tanh so very-negative T does not collapse the score below zero.
+    `snapshots` is a list of per-day dicts each containing
+    `treasury`, `population`, `happiness`,
+    `cumulative_renewable_served_kwh`, and
+    `cumulative_total_served_kwh`. `starting_cash` offsets the treasury
+    utility so the score measures prosperity generated by play, not the
+    size of the endowment.
+
+    Returns `{"n_days": 0, "score": 0.0, "components": {}}` for an
+    empty input — never raises, never returns a partial payload.
     """
-    s = world.state
-    starting_cash = float(world.config.starting_cash)
+    n = len(snapshots)
+    if n == 0:
+        return {"n_days": 0, "score": 0.0, "components": {}}
 
-    P = float(s.population)
-    T = float(s.treasury) - starting_cash
+    treasury = [float(s["treasury"]) for s in snapshots]
+    population = [float(s["population"]) for s in snapshots]
+    happiness = [float(s["happiness"]) for s in snapshots]
 
-    total_served = float(s.cumulative_total_served_kwh)
-    renewable_served = float(s.cumulative_renewable_served_kwh)
-    R = renewable_served / max(total_served, 1.0)
+    treasury_delta = [t - starting_cash for t in treasury]
+    u_t = [_u_treasury(t) for t in treasury]
+    u_p = [_u_pop(p) for p in population]
+    u_h = [_u_happy(h) for h in happiness]
 
-    p_term = P_TERM_WEIGHT * min(P / max(p_ref, 1.0), P_TERM_CAP)
-    t_term = T_TERM_WEIGHT * 0.5 * (1.0 + math.tanh(T / max(t_ref, 1.0)))
-    r_term = R_TERM_WEIGHT * R
-    total = p_term + t_term + r_term
+    level_treasury = _mean(u_t)
+    level_pop = _mean(u_p)
+    level_happy = _mean(u_h)
+
+    # Trailing-window utility per axis. Used to lift the trend term
+    # out of the 0.5 fixed point when the signal saturates at its
+    # utility ceiling (zero CAGR but maximal level → trend should be
+    # high, not mid).
+    window = max(1, int(n * RECENT_WINDOW_FRACTION))
+    recent_u_t = _mean(u_t[-window:])
+    recent_u_p = _mean(u_p[-window:])
+    recent_u_h = _mean(u_h[-window:])
+
+    growth_treasury = 0.5 + 0.5 * math.tanh(_linear_slope(treasury_delta) / TREASURY_TREND_SCALE)
+    growth_pop = _trend_cagr(population, CAGR_SCALE_POP)
+    growth_happy = _trend_cagr(happiness, CAGR_SCALE_HAPPY)
+
+    trend_treasury = max(growth_treasury, recent_u_t)
+    trend_pop = max(growth_pop, recent_u_p)
+    trend_happy = max(growth_happy, recent_u_h)
+
+    trough_treasury = _u_treasury(_cvar_low(treasury, CVAR_ALPHA))
+    trough_pop = _u_pop(_cvar_low(population, CVAR_ALPHA))
+    trough_happy = _u_happy(_cvar_low(happiness, CVAR_ALPHA))
+
+    axis_treasury = _axis(level_treasury, trend_treasury, trough_treasury)
+    axis_pop = _axis(level_pop, trend_pop, trough_pop)
+    axis_happy = _axis(level_happy, trend_happy, trough_happy)
+
+    latest = snapshots[-1]
+    cum_renewable = float(latest["cumulative_renewable_served_kwh"])
+    cum_total = float(latest["cumulative_total_served_kwh"])
+    renewable_share = cum_renewable / max(cum_total, 1.0)
+    R = min(1.0, renewable_share / RENEWABLE_TARGET)
+
+    solvency = sum(1 for t in treasury if t > 0.0) / n
+
+    headline = 100.0 * (
+        _W_AXIS_TREASURY * axis_treasury
+        + _W_AXIS_POP * axis_pop
+        + _W_AXIS_HAPPY * axis_happy
+        + _W_R * R
+        + _W_SOLVENCY * solvency
+    )
+    score = max(0.0, min(100.0, headline))
 
     return {
-        "P": P,
-        "P_ref": float(p_ref),
-        "p_term": p_term,
-        "T": T,
-        "T_ref": float(t_ref),
-        "t_term": t_term,
-        "R": R,
-        "r_term": r_term,
-        "score": total,
+        "n_days": n,
+        "score": float(score),
+        "components": {
+            "level_treasury": float(level_treasury),
+            "trend_treasury": float(trend_treasury),
+            "trough_treasury": float(trough_treasury),
+            "axis_treasury": float(axis_treasury),
+            "level_pop": float(level_pop),
+            "trend_pop": float(trend_pop),
+            "trough_pop": float(trough_pop),
+            "axis_pop": float(axis_pop),
+            "level_happy": float(level_happy),
+            "trend_happy": float(trend_happy),
+            "trough_happy": float(trough_happy),
+            "axis_happy": float(axis_happy),
+            "R": float(R),
+            "renewable_share": float(renewable_share),
+            "solvency": float(solvency),
+        },
     }
+
+
+def _u_treasury(treasury_delta: float) -> float:
+    return 0.5 * (1.0 + math.tanh(treasury_delta / TREASURY_SCALE))
+
+
+def _u_pop(p: float) -> float:
+    return 1.0 - math.exp(-max(p, 0.0) / POP_TARGET)
+
+
+def _u_happy(h: float) -> float:
+    if h <= 0.0:
+        return 0.0
+    if h >= HAPPINESS_CEIL:
+        return 1.0
+    return h / HAPPINESS_CEIL
+
+
+def _mean(xs: list[float]) -> float:
+    return sum(xs) / len(xs)
+
+
+def _linear_slope(ys: list[float]) -> float:
+    """Best-fit linear slope of `ys` against day index (0..N-1)."""
+    n = len(ys)
+    if n < 2:
+        return 0.0
+    mean_x = (n - 1) / 2.0
+    mean_y = sum(ys) / n
+    num = 0.0
+    den = 0.0
+    for i, y in enumerate(ys):
+        dx = i - mean_x
+        num += dx * (y - mean_y)
+        den += dx * dx
+    if den == 0.0:
+        return 0.0
+    return num / den
+
+
+def _trend_cagr(xs: list[float], scale: float) -> float:
+    """tanh-mapped daily CAGR. Falls back to signed-delta tanh when x0 <= 0."""
+    n = len(xs)
+    if n < 2:
+        return 0.5
+    x0 = xs[0]
+    xt = xs[-1]
+    if x0 > 0.0:
+        cagr = (max(xt, _EPS) / max(x0, _EPS)) ** (1.0 / n) - 1.0
+        return 0.5 + 0.5 * math.tanh(cagr / scale)
+    # Degenerate x0 <= 0: collapse to the signed net delta passed
+    # through tanh. Keeps the term in [0, 1] without dividing by zero.
+    return 0.5 + 0.5 * math.tanh(xt - x0)
+
+
+def _cvar_low(xs: list[float], alpha: float) -> float:
+    """Mean of the lowest `ceil(alpha * N)` values. At least one value."""
+    n = len(xs)
+    k = max(1, math.ceil(alpha * n))
+    lowest = sorted(xs)[:k]
+    return sum(lowest) / k
+
+
+def _axis(level: float, trend: float, trough: float) -> float:
+    return _AXIS_LEVEL_WEIGHT * level + _AXIS_TREND_WEIGHT * trend + _AXIS_TROUGH_WEIGHT * trough

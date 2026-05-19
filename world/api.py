@@ -27,19 +27,11 @@ from agents.base import BaseAgent
 from world.action_log import ActionLog
 from world.catalog import build_catalog
 from world.scenario import NullScenario, load_scenario
-from world.scoring_formula import compute_score
+from world.scoring import compute_score
 from world.sim import World
 from world.subsurface import SEISMIC_DEFAULT_SIZE
 
 load_dotenv()  # silent no-op if .env is absent
-
-# Legacy scripted-baseline directory. The new `/score` endpoint does
-# not read this — it computes an absolute score from the active
-# recorder's per-day log. The constant stays exported because
-# `evaluate.py`'s `_score_breakdown` still consults the baseline files
-# for the `arena/` flow, and removing it would force a cross-module
-# refactor that is out of scope for this slice.
-BASELINES_DIR: Path = Path(__file__).resolve().parent.parent / "baselines"
 
 # Default repo root for `POST /agent/attach`. Tests can override via
 # `create_app(agent_repo_root=...)` so a `tmp_path` scratch dir counts as
@@ -514,7 +506,7 @@ def create_app(
         # recorder writes one line per just-completed day. Missing
         # recorder / missing file / empty file all return the
         # empty-response payload with HTTP 200; never 404. See
-        # `world/scoring_formula.py` for the formula and scale anchors.
+        # `world/scoring.py` for the formula and scale anchors.
         world = app.state.world
         recorder = world.recorder
         if recorder is None or not recorder.states_path.exists():

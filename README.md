@@ -59,6 +59,40 @@ docker compose up                                   # manual play at :8000
 docker compose --profile eval run --rm agent       # evaluate submit/agent.py
 ```
 
+## Running an LLM agent
+
+`agents/llm_react/` and `agents/langgraph_agent/` build their LLM client from environment variables (see [`agents/llm.py`](agents/llm.py)):
+
+| Variable | Purpose |
+|---|---|
+| `LLM_PROVIDER` | `openai` (default), `anthropic`, `ollama`, or `nvidia` |
+| `LLM_MODEL` | model id — provider-specific default if unset |
+| `LLM_API_KEY` | required for openai/anthropic/nvidia; ignored for ollama |
+| `NVIDIA_API_KEY` | accepted as a fallback for `nvidia` when `LLM_API_KEY` is unset (the name `.env` typically uses) |
+| `LLM_BASE_URL` | optional override for the vendor's default endpoint |
+
+`evaluate.py` calls `load_dotenv()` on a `.env` next to it, so any of these can be set there instead of in your shell.
+
+Local Ollama (no key, no quota):
+
+```bash
+ollama pull gemma4                                # any tool-capable model works
+LLM_PROVIDER=ollama LLM_MODEL=gemma4 \
+  python evaluate.py --agent agents.llm_react --seed 42
+```
+
+Ollama's `/api/chat` is hit at `http://localhost:11434` by default — override with `LLM_BASE_URL` if your daemon lives elsewhere. The model must support tool calling (gemma4, llama3.1+, qwen2.5+); models without tool support will return empty tool calls and the agent will idle.
+
+NVIDIA NIM (via NVIDIA's recommended `langchain_nvidia_ai_endpoints.ChatNVIDIA` client; requires the `[llm]` extra):
+
+```bash
+pip install -e ".[llm]"                           # installs langchain-nvidia-ai-endpoints
+echo 'NVIDIA_API_KEY=nvapi-...' >> .env           # or export LLM_API_KEY
+LLM_PROVIDER=nvidia python evaluate.py --agent agents.llm_react --seed 42
+```
+
+Default model is `moonshotai/kimi-k2.6`; override with `LLM_MODEL`. Override `LLM_BASE_URL` to point at a private NIM deployment. Streaming and Kimi-style `reasoning_content` are not surfaced — the agent consumes one full response per turn.
+
 ## Submit an agent
 
 1. Fork the repo.
@@ -74,8 +108,8 @@ world/              # the simulation, API, and UI (single source of truth)
 agents/             # reference agents + community submissions
   base.py             Agent protocol + BaseAgent helper
   scripted.py         rule-based reference (forms baselines/seed_42.json)
-  llm_react.py        OpenAI-compatible LLM ReAct agent
-  langgraph_agent.py  LangGraph variant
+  llm_react.py        ReAct agent over OpenAI / Anthropic / Ollama / NVIDIA NIM
+  langgraph_agent.py  LangGraph variant (same provider set)
   community/          one .py per community submission (created on first PR)
 scenarios/          # one Python file per shipped stress scenario
   baseline.py         null scenario on seed 42

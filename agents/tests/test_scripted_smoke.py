@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 from agents.api_client import ApiClient
 from agents.scripted import ScriptedAgent
 from world.api import create_app
-from world.scoring import score as score_world
 from world.sim import World
 
 BASELINE_PATH = Path(__file__).resolve().parent.parent.parent / "baselines" / "seed_42.json"
@@ -80,14 +79,6 @@ def test_scripted_matches_committed_baseline() -> None:
     assert abs(T_actual - t_ref) / max(abs(t_ref), 1.0) < 0.05, (
         f"treasury delta drift: actual={T_actual}, baseline={t_ref}"
     )
-
-    # Scoring formula is read-only over (P, T, R, baselines); pinning that
-    # the score function still consumes (p_ref, t_ref) cleanly catches any
-    # baseline-format regression.
-    breakdown = score_world(world, p_ref, t_ref)
-    assert "score" in breakdown
-    assert breakdown["P"] == P_actual
-    assert breakdown["T"] == T_actual
 
 
 def test_scripted_builds_batteries_when_renewables_exist() -> None:

@@ -23,6 +23,7 @@ dev = [
 ]
 llm = [
     "langgraph>=1.0",
+    "langchain-nvidia-ai-endpoints>=0.3",
 ]
 
 [tool.setuptools.packages.find]
@@ -31,7 +32,12 @@ exclude = ["world.tests*", "agents.tests*", "scenarios.tests*", "arena.tests*", 
 
 [tool.pytest.ini_options]
 testpaths = ["world/tests", "agents/tests", "scenarios/tests", "arena/tests", "tests"]
-addopts = "-q"
+# `-m 'not live'` keeps `make check` offline — live tests need network +
+# vendor API keys. Opt in with `pytest -m live`.
+addopts = "-q -m 'not live'"
+markers = [
+    "live: hits a real third-party API (skipped by default; run with `pytest -m live`)",
+]
 
 [tool.ruff]
 line-length = 100

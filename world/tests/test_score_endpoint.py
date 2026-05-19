@@ -5,7 +5,7 @@ and returns the `compute_score` result. Empty recorder / missing file /
 empty file all return the empty-response payload with HTTP 200; never
 404. See `.scratch/scoring/PRD.md` for the contract.
 
-The pure-function formula tests live in `test_scoring_formula.py`;
+The pure-function formula tests live in `test_scoring.py`;
 this file pins only the HTTP wiring and the on-disk-log read path.
 """
 
@@ -32,6 +32,7 @@ COMPONENT_KEYS = {
     "trough_happy",
     "axis_happy",
     "R",
+    "renewable_share",
     "solvency",
 }
 
