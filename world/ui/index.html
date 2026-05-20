@@ -39,6 +39,7 @@
     <button class="tab active" data-tab="map">Map</button>
     <button class="tab" data-tab="wells">Wells</button>
     <button class="tab" data-tab="events">Events</button>
+    <button class="tab" data-tab="finance">Finance</button>
   </nav>
   <main>
     <section id="tab-map" class="tabpanel active">
@@ -173,8 +174,6 @@
           </thead>
           <tbody id="refineriestable-body"></tbody>
         </table>
-        <h2>Finance — yesterday</h2>
-        <ul id="financelist" class="finance-list"></ul>
       </div>
     </section>
     <section id="tab-events" class="tabpanel">
@@ -227,6 +226,12 @@
           dedicated <code>event_rng</code> stream. Regulatory tightening
           is capped at 3 occurrences per game.
         </p>
+      </div>
+    </section>
+    <section id="tab-finance" class="tabpanel">
+      <div id="financewrap">
+        <h2>Finance — yesterday</h2>
+        <ul id="financelist" class="finance-list"></ul>
       </div>
     </section>
   </main>
