@@ -2406,6 +2406,7 @@
   // post `world.scenario.NullScenario` directly.
   const scenarioCurrentEl = document.getElementById("scenario-current");
   const scenarioDescriptionEl = document.getElementById("scenario-description");
+  const scenarioSourceEl = document.getElementById("scenario-source");
   const scenarioChooseBtn = document.getElementById("scenario-choose");
   const scenarioDetachBtn = document.getElementById("scenario-detach");
   const scenarioModal = document.getElementById("scenario-attach-modal");
@@ -2426,15 +2427,30 @@
     }
   }
 
+  function renderScenarioSource(source) {
+    if (!scenarioSourceEl) return;
+    const text = typeof source === "string" ? source : "";
+    if (text) {
+      // textContent (not innerHTML) is the XSS-safe path — the source
+      // ends up as a literal text node, never parsed as HTML.
+      scenarioSourceEl.textContent = text;
+      scenarioSourceEl.classList.remove("hidden");
+    } else {
+      scenarioSourceEl.textContent = "";
+      scenarioSourceEl.classList.add("hidden");
+    }
+  }
+
   async function refreshScenarioReadout() {
     if (!scenarioCurrentEl) return;
     if (isReplay()) {
       const md = replay.metadata || {};
       const scenario = md.scenario == null ? "(none)" : md.scenario;
       scenarioCurrentEl.textContent = scenario;
-      // Replay metadata.json doesn't carry the live class docstring;
-      // hide the plan rather than render a stale one.
+      // Replay metadata.json doesn't carry the live class docstring or
+      // module source; hide both rather than render stale snapshots.
       renderScenarioDescription(null);
+      renderScenarioSource(null);
       return;
     }
     try {
@@ -2444,6 +2460,7 @@
       const path = body.dotted_path;
       scenarioCurrentEl.textContent = path == null ? "(none)" : path;
       renderScenarioDescription(body.description);
+      renderScenarioSource(body.source);
     } catch (err) {
       // ignore — boot race
     }

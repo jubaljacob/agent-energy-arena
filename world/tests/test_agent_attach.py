@@ -424,17 +424,17 @@ def test_scenario_persists_through_agent_attach(tmp_path: Path) -> None:
     client, _app, _world, _log = _client(tmp_path, agent_repo_root=tmp_path)
     r = client.post("/scenario", json={"dotted_path": SCENARIO_FIXTURE_PATH})
     assert r.status_code == 200
-    assert client.get("/scenario").json() == {
-        "dotted_path": SCENARIO_FIXTURE_PATH,
-        "description": None,
-    }
+    before = client.get("/scenario").json()
+    assert before["dotted_path"] == SCENARIO_FIXTURE_PATH
+    assert before["description"] is None
+    assert isinstance(before["source"], str) and before["source"]
 
     r = client.post("/agent/attach", json={"folder": "myagent"})
     assert r.status_code == 200, r.text
-    assert client.get("/scenario").json() == {
-        "dotted_path": SCENARIO_FIXTURE_PATH,
-        "description": None,
-    }
+    after = client.get("/scenario").json()
+    assert after["dotted_path"] == SCENARIO_FIXTURE_PATH
+    assert after["description"] is None
+    assert isinstance(after["source"], str) and after["source"]
 
 
 # -- Slice #4: act() crash safety + clock-violation guard -----------------

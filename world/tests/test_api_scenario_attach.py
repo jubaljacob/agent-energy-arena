@@ -47,7 +47,7 @@ def test_get_scenario_returns_null_on_fresh_world(tmp_path: Path) -> None:
     client, _app, _world, _log = _client(tmp_path)
     r = client.get("/scenario")
     assert r.status_code == 200
-    assert r.json() == {"dotted_path": None, "description": None}
+    assert r.json() == {"dotted_path": None, "description": None, "source": None}
 
 
 # -- GET /scenarios ---------------------------------------------------------
@@ -79,10 +79,15 @@ def test_post_scenario_attaches_by_dotted_path(tmp_path: Path) -> None:
     assert world.scenario_dotted_path == FIXTURE_PATH
 
     # GET /scenario now surfaces the attached path. TraceScenario has no
-    # class docstring, so `description` is null.
+    # class docstring, so `description` is null. `source` is the
+    # fixture's full module file so the UI can render it in the source
+    # box — assert the bytes match what's on disk.
+    fixture_path = Path(__file__).resolve().parent / "scenario_fixture.py"
+    expected_source = fixture_path.read_text(encoding="utf-8")
     assert client.get("/scenario").json() == {
         "dotted_path": FIXTURE_PATH,
         "description": None,
+        "source": expected_source,
     }
 
     # Action log captured the success.
@@ -97,7 +102,9 @@ def test_get_scenario_surfaces_class_docstring_as_description(tmp_path: Path) ->
     """When the attached scenario class has a docstring, GET /scenario
     returns it stripped as `description`. The UI prints this as the
     scenario's "plan" once loaded. `scenarios.baseline` extends
-    NullScenario, so we use a non-Null shipped scenario here."""
+    NullScenario, so we use a non-Null shipped scenario here. `source`
+    is the full module file so the UI source box can show what the
+    scenario actually does."""
     client, _app, _world, _log = _client(tmp_path)
     r = client.post("/scenario", json={"dotted_path": "scenarios.grid_stress"})
     assert r.status_code == 200, r.text
@@ -105,6 +112,8 @@ def test_get_scenario_surfaces_class_docstring_as_description(tmp_path: Path) ->
     assert body["dotted_path"] == "scenarios.grid_stress"
     assert isinstance(body["description"], str)
     assert body["description"].startswith("Stress the grid")
+    assert isinstance(body["source"], str)
+    assert "class GridStress" in body["source"]
 
 
 def test_post_scenario_bad_path_returns_400_and_logs(tmp_path: Path) -> None:
@@ -173,7 +182,11 @@ def test_reset_without_scenario_is_backwards_compatible(tmp_path: Path) -> None:
     r = client.post("/reset", json={"seed": 7})
     assert r.status_code == 200
     assert isinstance(world.scenario, NullScenario)
-    assert client.get("/scenario").json() == {"dotted_path": None, "description": None}
+    assert client.get("/scenario").json() == {
+        "dotted_path": None,
+        "description": None,
+        "source": None,
+    }
 
 
 # -- GET /run ---------------------------------------------------------------

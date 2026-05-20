@@ -9,6 +9,7 @@ runs/{run_id}/actions.jsonl.
 from __future__ import annotations
 
 import importlib
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -374,10 +375,24 @@ def create_app(
         # attached" from a real dotted path. `description` mirrors that:
         # null when nothing is attached, otherwise the scenario class's
         # docstring (the "plan" the UI prints once a scenario is loaded).
+        # `source` is the full module file the UI shows in a read-only
+        # code box so a player can inspect what the scenario actually
+        # does.
         if isinstance(world.scenario, NullScenario):
-            return {"dotted_path": None, "description": None}
+            return {"dotted_path": None, "description": None, "source": None}
         doc = (type(world.scenario).__doc__ or "").strip() or None
-        return {"dotted_path": world.scenario_dotted_path, "description": doc}
+        source: str | None = None
+        try:
+            src_file = inspect.getsourcefile(type(world.scenario))
+            if src_file:
+                source = Path(src_file).read_text(encoding="utf-8")
+        except (OSError, TypeError):
+            source = None
+        return {
+            "dotted_path": world.scenario_dotted_path,
+            "description": doc,
+            "source": source,
+        }
 
     @app.post("/scenario")
     def post_scenario(body: ScenarioBody) -> dict[str, Any]:

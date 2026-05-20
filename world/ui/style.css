@@ -224,6 +224,22 @@ body.replay-mode #scenario-detach {
   white-space: pre-wrap;
 }
 .scenario-description.hidden { display: none; }
+.scenario-source {
+  margin: 0 0 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: #16181d;
+  border: 1px solid #2a2d34;
+  border-radius: 4px;
+  color: #c8cad0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: pre;
+  max-height: 22rem;
+  overflow: auto;
+  tab-size: 4;
+}
+.scenario-source.hidden { display: none; }
 .scenario-hint {
   font-size: 0.7rem;
   color: #8b8f9a;
