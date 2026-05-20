@@ -27,10 +27,18 @@ instantiate. The discovery mirrors the agent loader in `evaluate.py`.
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from world.sim import World
+
+
+# Mirrors the agent-folder walk in `world/api.py`: hidden dirs are
+# skipped via the leading-dot check at the walk site; only `__pycache__`
+# needs an explicit name skip. Kept narrow on purpose — broadening the
+# skip set silently hides scenarios from the picker.
+_SCENARIO_WALK_SKIP: frozenset[str] = frozenset({"__pycache__"})
 
 
 class Scenario:
@@ -54,6 +62,62 @@ class NullScenario(Scenario):
     """Default scenario: does nothing. Attached to every fresh world."""
 
     pass
+
+
+def discover_scenarios(scenarios_root: Path) -> list[str]:
+    """Walk `scenarios_root` for `.py` modules that define a concrete
+    `Scenario` subclass and return their importable dotted paths.
+
+    Powers `GET /scenarios`, the symmetric counterpart of
+    `GET /agent/folders` that backs the UI's scenario picker. Dotted
+    paths are built relative to `scenarios_root.parent`, so a file at
+    `repo/scenarios/baseline.py` resolves to `scenarios.baseline`.
+
+    Skip rules: hidden dirs (leading `.`) and `__pycache__`. `__init__.py`
+    is skipped — importing it as `<pkg>.__init__` would never round-trip
+    through `load_scenario`. A module that raises on import is silently
+    skipped so one broken file cannot break the picker for the rest.
+
+    The walk filters on the same Scenario-subclass rule as `load_scenario`
+    (excludes `Scenario` and `NullScenario` themselves). The returned list
+    is sorted alphabetically for stable UI rendering.
+    """
+    root = scenarios_root.resolve()
+    parent = root.parent
+    found: list[str] = []
+
+    def walk(current: Path) -> None:
+        try:
+            entries = list(current.iterdir())
+        except (PermissionError, OSError):
+            return
+        for entry in entries:
+            if entry.is_dir() and not entry.is_symlink():
+                if entry.name.startswith(".") or entry.name in _SCENARIO_WALK_SKIP:
+                    continue
+                walk(entry)
+                continue
+            if not entry.is_file() or entry.suffix != ".py" or entry.name == "__init__.py":
+                continue
+            rel = entry.relative_to(parent).with_suffix("")
+            dotted = ".".join(rel.parts)
+            try:
+                mod = importlib.import_module(dotted)
+            except Exception:
+                continue
+            for value in vars(mod).values():
+                if (
+                    isinstance(value, type)
+                    and issubclass(value, Scenario)
+                    and value is not Scenario
+                    and value is not NullScenario
+                ):
+                    found.append(dotted)
+                    break
+
+    walk(root)
+    found.sort()
+    return found
 
 
 def load_scenario(dotted_path: str) -> Scenario:

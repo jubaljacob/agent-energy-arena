@@ -26,7 +26,7 @@ from agents.api_client import UiAgentApiClient
 from agents.base import BaseAgent
 from world.action_log import ActionLog
 from world.catalog import build_catalog
-from world.scenario import NullScenario, load_scenario
+from world.scenario import NullScenario, discover_scenarios, load_scenario
 from world.scoring import compute_score
 from world.sim import World
 from world.subsurface import SEISMIC_DEFAULT_SIZE
@@ -390,6 +390,11 @@ def create_app(
         result: dict[str, Any] = {"ok": True, "dotted_path": body.dotted_path}
         app.state.action_log.append("/scenario", params, ok=True, result=result)
         return result
+
+    @app.get("/scenarios")
+    def get_scenarios() -> dict[str, Any]:
+        repo_root: Path = app.state._agent_repo_root
+        return {"scenarios": discover_scenarios(repo_root / "scenarios")}
 
     @app.get("/agent")
     def get_agent() -> dict[str, Any]:

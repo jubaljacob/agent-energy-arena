@@ -185,15 +185,15 @@
             <span id="scenario-current" class="scenario-current">(none)</span>
           </div>
           <div class="scenario-controls">
-            <input id="scenario-input" type="text" placeholder="dotted path (e.g. scenarios.grid_stress.GridStress)" />
-            <button id="scenario-attach">Attach</button>
+            <button id="scenario-choose">Choose scenario</button>
             <button id="scenario-detach">Detach</button>
           </div>
           <p class="scenario-hint">
-            Calls <code>POST /scenario</code> with the dotted path. Detach
-            re-attaches <code>scenarios.baseline</code> (a NullScenario
-            subclass, so the readout flips to <code>(none)</code>).
-            Disabled in replay mode.
+            Opens a picker populated from <code>GET /scenarios</code>;
+            Confirm calls <code>POST /scenario</code>. Detach re-attaches
+            <code>scenarios.baseline</code> (a NullScenario subclass, so
+            the readout flips to <code>(none)</code>). Disabled in replay
+            mode.
           </p>
         </div>
         <h2>Active events</h2>
@@ -242,6 +242,22 @@
       <div class="modal-actions">
         <button id="modal-cancel">Cancel</button>
         <button id="modal-confirm" class="primary">Drill anyway</button>
+      </div>
+    </div>
+  </div>
+  <div id="scenario-attach-modal" class="modal-backdrop">
+    <div class="modal">
+      <h3>Attach a scenario</h3>
+      <p>
+        Lists scenarios discovered under the repo's <code>scenarios/</code>
+        package. Confirm calls <code>POST /scenario</code> with the
+        selected dotted path.
+      </p>
+      <label for="scenario-select">Scenario</label>
+      <select id="scenario-select"></select>
+      <div class="modal-actions">
+        <button id="scenario-attach-cancel">Cancel</button>
+        <button id="scenario-attach-confirm" class="primary">Confirm</button>
       </div>
     </div>
   </div>

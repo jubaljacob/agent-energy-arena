@@ -50,6 +50,22 @@ def test_get_scenario_returns_null_on_fresh_world(tmp_path: Path) -> None:
     assert r.json() == {"dotted_path": None}
 
 
+# -- GET /scenarios ---------------------------------------------------------
+
+
+def test_get_scenarios_returns_discovered_dotted_paths(tmp_path: Path) -> None:
+    """Symmetric to `GET /agent/folders`: returns `{scenarios: [...]}`
+    enumerated under the repo's `scenarios/` package. `scenarios.baseline`
+    is the canonical shipped scenario and must always appear."""
+    client, _app, _world, _log = _client(tmp_path)
+    r = client.get("/scenarios")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body.keys()) == {"scenarios"}
+    assert isinstance(body["scenarios"], list)
+    assert "scenarios.baseline" in body["scenarios"]
+
+
 # -- POST /scenario ---------------------------------------------------------
 
 

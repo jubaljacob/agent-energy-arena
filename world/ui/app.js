@@ -2404,10 +2404,13 @@
   // flips back to `{dotted_path: null}` and the readout shows `(none)`.
   // The loader explicitly excludes NullScenario itself, so we cannot
   // post `world.scenario.NullScenario` directly.
-  const scenarioInputEl = document.getElementById("scenario-input");
   const scenarioCurrentEl = document.getElementById("scenario-current");
-  const scenarioAttachBtn = document.getElementById("scenario-attach");
+  const scenarioChooseBtn = document.getElementById("scenario-choose");
   const scenarioDetachBtn = document.getElementById("scenario-detach");
+  const scenarioModal = document.getElementById("scenario-attach-modal");
+  const scenarioSelectEl = document.getElementById("scenario-select");
+  const scenarioConfirmBtn = document.getElementById("scenario-attach-confirm");
+  const scenarioCancelBtn = document.getElementById("scenario-attach-cancel");
   const DETACH_DOTTED_PATH = "scenarios.baseline";
 
   async function refreshScenarioReadout() {
@@ -2456,18 +2459,97 @@
     }
   }
 
-  if (scenarioAttachBtn && scenarioInputEl) {
-    scenarioAttachBtn.addEventListener("click", async () => {
+  async function getCurrentScenarioPath() {
+    try {
+      const res = await fetch("/scenario");
+      if (!res.ok) return null;
+      const body = await res.json();
+      return body.dotted_path == null ? null : body.dotted_path;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  async function populateScenarioSelect(currentPath) {
+    if (!scenarioSelectEl) return;
+    scenarioSelectEl.innerHTML = "";
+    const loading = document.createElement("option");
+    loading.textContent = "Loading…";
+    loading.disabled = true;
+    scenarioSelectEl.appendChild(loading);
+    scenarioSelectEl.disabled = true;
+    if (scenarioConfirmBtn) scenarioConfirmBtn.disabled = true;
+    try {
+      const res = await fetch("/scenarios");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      const scenarios = Array.isArray(body.scenarios) ? body.scenarios : [];
+      scenarioSelectEl.innerHTML = "";
+      if (scenarios.length === 0) {
+        const opt = document.createElement("option");
+        opt.textContent = "no scenarios discovered";
+        opt.disabled = true;
+        scenarioSelectEl.appendChild(opt);
+        scenarioSelectEl.disabled = true;
+        return;
+      }
+      for (const path of scenarios) {
+        const opt = document.createElement("option");
+        opt.value = path;
+        opt.textContent = path;
+        scenarioSelectEl.appendChild(opt);
+      }
+      if (currentPath && scenarios.includes(currentPath)) {
+        scenarioSelectEl.value = currentPath;
+      } else {
+        scenarioSelectEl.value = scenarios[0];
+      }
+      scenarioSelectEl.disabled = false;
+      if (scenarioConfirmBtn) scenarioConfirmBtn.disabled = false;
+    } catch (err) {
+      scenarioSelectEl.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.textContent = "failed to load scenarios";
+      opt.disabled = true;
+      scenarioSelectEl.appendChild(opt);
+      scenarioSelectEl.disabled = true;
+      showToast(`could not list scenarios: ${err}`, "error");
+    }
+  }
+
+  function openScenarioModal() {
+    if (!scenarioModal) return;
+    scenarioModal.classList.add("show");
+    getCurrentScenarioPath().then((current) =>
+      populateScenarioSelect(current).then(() => {
+        if (scenarioSelectEl && !scenarioSelectEl.disabled) scenarioSelectEl.focus();
+      }),
+    );
+  }
+  function closeScenarioModal() {
+    if (scenarioModal) scenarioModal.classList.remove("show");
+  }
+
+  if (scenarioChooseBtn) {
+    scenarioChooseBtn.addEventListener("click", () => {
       if (isMutationLocked()) return;
-      const val = (scenarioInputEl.value || "").trim();
+      openScenarioModal();
+    });
+  }
+  if (scenarioCancelBtn) {
+    scenarioCancelBtn.addEventListener("click", () => closeScenarioModal());
+  }
+  if (scenarioConfirmBtn && scenarioSelectEl) {
+    scenarioConfirmBtn.addEventListener("click", async () => {
+      const val = (scenarioSelectEl.value || "").trim();
       if (!val) {
-        showToast("enter a dotted path first", "error");
+        showToast("pick a scenario first", "error");
         return;
       }
       const ok = await attachScenario(val);
       if (ok) {
+        closeScenarioModal();
         showToast(`attached ${val}`, "ok");
-        scenarioInputEl.value = "";
       }
     });
   }

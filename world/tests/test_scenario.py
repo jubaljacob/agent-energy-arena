@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from world.scenario import NullScenario, Scenario, load_scenario
+from world.scenario import NullScenario, Scenario, discover_scenarios, load_scenario
 from world.sim import World
 
 # -- Scenario base + NullScenario ------------------------------------------
@@ -99,6 +100,69 @@ def test_load_scenario_ignores_scenario_and_null_scenario_themselves(
     monkeypatch.setitem(sys.modules, mod_name, mod)
     with pytest.raises(ValueError):
         load_scenario(mod_name)
+
+
+# -- discover_scenarios ----------------------------------------------------
+
+
+def _write(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body)
+
+
+def test_discover_scenarios_returns_only_modules_with_scenario_subclass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid module with a Scenario subclass appears; a module with no
+    subclass is skipped; a module that raises on import is silently
+    skipped (one broken file must not break the picker for the rest)."""
+    pkg = "_scn_disc_pkg"
+    root = tmp_path / pkg
+    _write(root / "__init__.py", "")
+    _write(
+        root / "valid.py",
+        "from world.scenario import Scenario\n"
+        "class MyScn(Scenario):\n"
+        "    def apply(self, world, day):\n"
+        "        return None\n",
+    )
+    _write(root / "nosub.py", "x = 1\n")
+    _write(root / "broken.py", "raise RuntimeError('boom')\n")
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    # Make sure any prior cached imports under this synthetic package
+    # don't leak between test invocations.
+    for name in list(sys.modules):
+        if name == pkg or name.startswith(pkg + "."):
+            del sys.modules[name]
+
+    assert discover_scenarios(root) == [f"{pkg}.valid"]
+
+
+def test_discover_scenarios_skips_hidden_and_pycache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pkg = "_scn_disc_skip_pkg"
+    root = tmp_path / pkg
+    body = (
+        "from world.scenario import Scenario\n"
+        "class S(Scenario):\n"
+        "    def apply(self, world, day):\n"
+        "        return None\n"
+    )
+    _write(root / "__init__.py", "")
+    _write(root / "visible.py", body)
+    _write(root / "__pycache__" / "cached.py", body)
+    _write(root / ".hidden" / "secret.py", body)
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for name in list(sys.modules):
+        if name == pkg or name.startswith(pkg + "."):
+            del sys.modules[name]
+
+    assert discover_scenarios(root) == [f"{pkg}.visible"]
 
 
 # -- Day-loop hook ---------------------------------------------------------
