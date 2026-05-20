@@ -1168,7 +1168,7 @@ def test_state_carries_pricing_default_fields() -> None:
         COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY
     )
     assert s.daily_tax_per_capita == pytest.approx(DAILY_TAX_PER_CAPITA)
-    assert s.blackout_penalty_hour == pytest.approx(w.config.blackout_penalty_hour)
+    assert s.outage_penalty_hour == pytest.approx(w.config.outage_penalty_hour)
     assert s.plant_fuel_cost_per_mwh == {
         "coal_plant": TILE_CATALOG["coal_plant"].fuel_cost_per_mwh,
         "gas_peaker": TILE_CATALOG["gas_peaker"].fuel_cost_per_mwh,
@@ -1235,19 +1235,19 @@ def test_pricing_state_fields_drive_default_accruals() -> None:
     assert state.daily_tax_per_capita == pytest.approx(DAILY_TAX_PER_CAPITA)
 
 
-def test_default_state_blackout_penalty_matches_pre_refactor_accrual() -> None:
+def test_default_state_outage_penalty_matches_pre_refactor_accrual() -> None:
     """A 24-hour blackout in a no-plant world accrues
-    24 × state.blackout_penalty_hour, which equals the Config default
-    (the legacy read site). This pins the blackout-penalty read site to
-    state, not Config, so a scenario can scale the penalty without
+    24 × state.outage_penalty_hour (full unserved share = 1.0), which
+    equals the Config default. This pins the outage-penalty read site
+    to state, not Config, so a scenario can scale the penalty without
     rebuilding the world."""
     w = World()
     w.reset(seed=42)
-    assert w.state.blackout_penalty_hour == pytest.approx(w.config.blackout_penalty_hour)
+    assert w.state.outage_penalty_hour == pytest.approx(w.config.outage_penalty_hour)
     treasury_before = w.state.treasury
     w.step(days=1)
-    expected_penalty = 24 * w.state.blackout_penalty_hour
-    assert w.state.today.blackout_penalty == pytest.approx(expected_penalty)
+    expected_penalty = 24 * w.state.outage_penalty_hour
+    assert w.state.today.outage_penalty == pytest.approx(expected_penalty)
     # Confirms the read path went through state, not Config: a mutation
     # to state mid-run would change the accrual, but a default-state run
     # is byte-identical to the legacy constants-only path.

@@ -147,20 +147,7 @@ make score
 
 `make serve` launches the UI on `localhost:8000`. Open the **Events** tab and click **Choose scenario**: the modal lists every scenario discovered under this package via `GET /scenarios`. Confirm to attach (`POST /scenario`), and the readout + plan + module source appear inline. Detach re-attaches `scenarios.baseline`.
 
-### Arena — agent × scenario sweeps
-
-The arena runner evaluates the Cartesian product of `(agent, scenario)` pairs and writes a JSON results file. Each pair runs in its own subprocess, so a misbehaving agent cannot poison another row.
-
-```bash
-python -m arena.runner \
-    --agent agents.scripted --agent agents.llm_react \
-    --scenario scenarios.baseline --scenario scenarios.grid_stress \
-    --output results.json
-```
-
-The seed for each pair is read from the scenario class's `seed` attribute (`Scenario.seed: int = 42` by default; subclasses override).
-
-`make baselines` regenerates the committed scripted-agent reference rows under `../baselines/arena/<scenario_short>-<seed>.json` for every entry in `PUBLIC_SCENARIOS` (see [`../arena/baselines.py`](../arena/baselines.py)). Re-run it after any change to the scripted agent, scenario definitions, or scoring pipeline; the arena integration test byte-matches against these files.
+The seed for each scenario is read from the class's `seed` attribute (`Scenario.seed: int = 42` by default; subclasses override).
 
 ## Scoring a scenario run
 
@@ -176,8 +163,8 @@ The score decomposes treasury / population / happiness into level + trend + trou
 Three ways to read a score:
 
 - **`evaluate.py`** — the final JSON line on stdout carries `{"score": ..., "components": {...}}` alongside the run ID. Pipe to `jq` to extract.
+- **`evaluate.py --score <run_dir>`** — score an existing run folder (reads `states.jsonl`) and prints the same payload.
 - **`GET /score` (UI / API)** — poll mid-run for live scoring; empty or fresh-reset runs return `{"n_days": 0, "score": 0.0, "components": {}}`.
-- **Arena results JSON** — each row written by `arena/runner.py` carries `score`, `n_days`, and the component dict, so a sweep produces a directly comparable matrix.
 
 ## Discovery and attachment
 
@@ -202,11 +189,11 @@ The world is fully deterministic given `(seed, action log)`. Scenarios participa
 - Overrides apply *after* the AR(1) draw, so the draw still consumes one element from `sim_rng` regardless of whether the override is set. Behavior outside the override window is unchanged.
 - A baseline-seed run with `--scenario scenarios.baseline` and one with no `--scenario` flag at all produce the same byte trace, because `Baseline` inherits `NullScenario.apply` (a no-op).
 
-[`../tests/test_replay.py`](../tests/test_replay.py) pins the byte-identical replay contract; [`tests/test_grid_stress.py`](tests/test_grid_stress.py) and its siblings pin each shipped scenario's effects.
+[`../world/tests/test_determinism.py`](../world/tests/test_determinism.py) pins the same-seed reproduction contract; [`tests/test_grid_stress.py`](tests/test_grid_stress.py) and its siblings pin each shipped scenario's effects.
 
 ## v1 shipped scenarios
 
-All three are seed-42 by default and ship as sibling modules in this package. Their committed scripted-agent reference rows live under [`../baselines/arena/`](../baselines/arena/). Ranking across runs is tracked externally; each run is independent.
+All three are seed-42 by default and ship as sibling modules in this package.
 
 ### `scenarios.baseline`
 
@@ -274,10 +261,9 @@ Source: [`economy_stress.py`](economy_stress.py).
 5. **Write a regression test.** Add `tests/test_<your_slug>.py` that drives the world a few days and asserts overrides fire on the documented days. [`tests/test_grid_stress.py`](tests/test_grid_stress.py) is a worked example.
 6. **Smoke-attach via the UI.** `make serve`, open the Events tab, **Choose scenario** → your slug. The class docstring is the plan; the module source is the box below it. If either looks wrong to a reader, fix it now.
 7. **Verify locally.** `make check` must pass. `python evaluate.py --agent agents.scripted --scenario scenarios.<your_slug> --seed 42` runs end-to-end and prints a score.
-8. **(Optional) Add to the public set.** If your scenario should anchor the arena baselines, append its dotted path to `PUBLIC_SCENARIOS` in [`../arena/baselines.py`](../arena/baselines.py) and run `make baselines` to commit the scripted-agent reference row.
 
 ## Submitting a scenario
 
-Open a PR with `scenarios/<your_slug>.py` and its test. CI runs `make check`. A maintainer reviews the override taxonomy and merges. If the scenario enters the arena's public set, `make baselines` regenerates the committed scripted-agent reference for it.
+Open a PR with `scenarios/<your_slug>.py` and its test. CI runs `make check`. A maintainer reviews the override taxonomy and merges.
 
 See [`../README.md`](../README.md) for the broader contributor flow.

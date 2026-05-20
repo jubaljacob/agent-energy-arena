@@ -18,7 +18,19 @@ directly.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Protocol
+
+
+class BudgetExpired(BaseException):
+    """Raised by `ApiClient` once `time.monotonic() >= deadline`.
+
+    Inherits `BaseException` (not `Exception`) so the broad `except
+    RuntimeError` / `except Exception` blocks scattered across agent
+    code do not swallow it — only `evaluate.py`'s explicit handler
+    catches it. The benchmark harness sets the deadline before
+    `play_game()`; clears it before reading post-game state.
+    """
 
 
 class _Transport(Protocol):
@@ -40,6 +52,10 @@ class ApiClient:
 
             self._client = httpx.Client(base_url=base_url, timeout=120.0)
         self._catalog_cache: dict[str, Any] | None = None
+        # Wall-clock deadline (monotonic). `None` disables the check.
+        # `evaluate.py --time-budget` sets it just before `play_game()`
+        # and clears it before reading the final state.
+        self._deadline_monotonic: float | None = None
 
     # -- Read endpoints ---------------------------------------------------
 
@@ -124,11 +140,17 @@ class ApiClient:
 
     # -- Internals --------------------------------------------------------
 
+    def _check_budget(self) -> None:
+        if self._deadline_monotonic is not None and time.monotonic() >= self._deadline_monotonic:
+            raise BudgetExpired("time budget elapsed")
+
     def _get(self, path: str, *, params: dict[str, Any] | None = None) -> Any:
+        self._check_budget()
         r = self._client.get(path, params=params or {})
         return _parse(r)
 
     def _post(self, path: str, body: dict[str, Any]) -> Any:
+        self._check_budget()
         r = self._client.post(path, json=body)
         return _parse(r)
 

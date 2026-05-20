@@ -39,6 +39,7 @@ from world.economy import refinery_process_kw
 from world.event_effects import heatwave_solar_derate
 from world.power import (
     PLANT_TYPES,
+    R_BROWNOUT,
     battery_charge_step,
     battery_discharge_step,
     compute_balance_state,
@@ -255,7 +256,7 @@ def commit_tick(state: WorldState, result: TickResult) -> None:
     DR-on-injection and producer shedding.
 
     Treasury is *not* touched here. Per-hour outage penalties accumulate
-    in ``state.today.blackout_penalty`` and are settled once at end of day
+    in ``state.today.outage_penalty`` and are settled once at end of day
     alongside ``power_revenue`` (same pattern: accumulate during the day,
     credit/debit treasury once when the day completes).
     """
@@ -269,16 +270,27 @@ def commit_tick(state: WorldState, result: TickResult) -> None:
         delta = result.charge_socs.get(b.id, 0.0) + result.discharge_socs.get(b.id, 0.0)
         b.soc_kwh = max(0.0, min(spec.storage_kwh, b.soc_kwh + delta))
 
-    # Outage bookkeeping. The penalty is *accumulated* here; treasury
-    # debit happens once at end of day. The legacy per-hour decrement
-    # produced the same daily total but made mid-day treasury observable
-    # — no caller relies on that observability (World.step runs the whole
-    # day before returning).
+    # Outage bookkeeping.
+    #   * Blackout charges the full `outage_penalty_hour` flat — supply
+    #     is effectively zero, so the city has lost all power.
+    #   * Brownout charges a `brownout_flat_penalty_hour` floor plus a
+    #     ramp on `unserved_share = 1 - supply/demand`. The ramp is
+    #     calibrated so a brownout right at the blackout boundary
+    #     (R = R_BROWNOUT) costs the same as a blackout, then it caps
+    #     there so a deeper brownout never out-costs an outright
+    #     blackout.
     if result.balance is BalanceState.BLACKOUT:
         today.blackout_hours += 1.0
-        today.blackout_penalty += state.blackout_penalty_hour
+        today.outage_penalty += state.outage_penalty_hour
     elif result.balance is BalanceState.BROWNOUT:
         today.brownout_hours += 1.0
+        unserved_share = 0.0
+        if result.demand_kw > 0.0:
+            unserved_share = max(0.0, 1.0 - result.supply_kw / result.demand_kw)
+        flat = state.brownout_flat_penalty_hour
+        cap = state.outage_penalty_hour
+        ramp = (cap - flat) / (1.0 - R_BROWNOUT)
+        today.outage_penalty += min(cap, flat + ramp * unserved_share)
 
     # Power revenue. Process loads (injection wells, refinery) are
     # unbilled; only civilian kWh × retail. Curtailment exports the

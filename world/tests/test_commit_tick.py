@@ -30,7 +30,7 @@ def _state() -> WorldState:
         treasury=10_000.0,
         grid_price_retail=0.08,
         grid_price_export=0.04,
-        blackout_penalty_hour=5_000.0,
+        outage_penalty_hour=4_000.0,
     )
 
 
@@ -111,24 +111,57 @@ def test_battery_soc_clamps_at_zero() -> None:
 # --- Outage bookkeeping ---------------------------------------------------
 
 
-def test_blackout_accumulates_hours_and_penalty_without_treasury_write() -> None:
+def test_blackout_charges_full_outage_penalty_per_hour() -> None:
+    """Blackout charges `outage_penalty_hour` flat, regardless of supply."""
     state = _state()
     treasury_before = state.treasury
-    commit_tick(state, _result(balance=BalanceState.BLACKOUT))
+    commit_tick(
+        state,
+        _result(balance=BalanceState.BLACKOUT, demand_kw=100.0, supply_kw=0.0),
+    )
     assert state.today.blackout_hours == pytest.approx(1.0)
-    assert state.today.blackout_penalty == pytest.approx(state.blackout_penalty_hour)
+    assert state.today.outage_penalty == pytest.approx(state.outage_penalty_hour)
     # Treasury debit happens at EOD, not per hour.
     assert state.treasury == treasury_before
 
 
-def test_brownout_accumulates_hours_only() -> None:
+def test_brownout_charges_flat_plus_ramp_on_unserved_share() -> None:
+    """20% unserved → flat + ramp·0.20.
+
+    With defaults flat=$1000, cap=$4000, R_BROWNOUT=0.70, the ramp slope is
+    (4000-1000)/(1-0.70) = 10_000, so a 20%-unserved brownout costs
+    1000 + 10000·0.20 = $3000.
+    """
     state = _state()
-    treasury_before = state.treasury
-    commit_tick(state, _result(balance=BalanceState.BROWNOUT))
+    commit_tick(
+        state,
+        _result(balance=BalanceState.BROWNOUT, demand_kw=100.0, supply_kw=80.0),
+    )
     assert state.today.brownout_hours == pytest.approx(1.0)
     assert state.today.blackout_hours == 0.0
-    assert state.today.blackout_penalty == 0.0
-    assert state.treasury == treasury_before
+    assert state.today.outage_penalty == pytest.approx(3000.0)
+
+
+def test_brownout_caps_at_outage_penalty_hour_near_blackout_boundary() -> None:
+    """At the brownout→blackout boundary (R=R_BROWNOUT=0.70, 30% unserved),
+    the ramp exactly reaches `outage_penalty_hour` — a deeper brownout
+    never out-costs an actual blackout."""
+    state = _state()
+    commit_tick(
+        state,
+        _result(balance=BalanceState.BROWNOUT, demand_kw=100.0, supply_kw=70.0),
+    )
+    assert state.today.outage_penalty == pytest.approx(state.outage_penalty_hour)
+
+
+def test_balanced_state_writes_no_outage_penalty() -> None:
+    """Penalty only fires under blackout/brownout, never under balanced/curtailment."""
+    state = _state()
+    commit_tick(
+        state,
+        _result(balance=BalanceState.BALANCED, demand_kw=100.0, supply_kw=100.0),
+    )
+    assert state.today.outage_penalty == 0.0
 
 
 # --- Power revenue --------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Reference agents for the Energy-AI Nexus world.
+"""Reference agents for the Agent Energy Arena.
 
 `base.Agent` is the protocol every submitted agent must implement.
 `api_client.ApiClient` is the thin HTTP wrapper used by all reference

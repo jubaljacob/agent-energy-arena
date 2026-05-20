@@ -22,7 +22,7 @@ All mutating endpoints return a common envelope:
 
 Read endpoints return the payload directly (no `ok` envelope). HTTP 4xx is reserved for **input validation** (bad path, missing required field, out-of-range parameter) and surfaces through the FastAPI/Pydantic layer; gameplay-level failures (`insufficient_funds`, `no_road_adjacency`) come back as `ok: false` with HTTP 200.
 
-Every mutating call is appended to `runs/{run_id}/actions.jsonl`, even when `ok: false`. The action log is the substrate for `python evaluate.py --replay runs/{run_id}`.
+Every mutating call is appended to `runs/{run_id}/actions.jsonl`, even when `ok: false`. End-of-day snapshots land in `runs/{run_id}/states.jsonl`; score a recorded run offline with `python evaluate.py --score runs/{run_id}`.
 
 ## Endpoint index
 
@@ -173,10 +173,6 @@ Returns the score breakdown for the current world against the committed dev-seed
   "score": 1.967
 }
 ```
-
-Errors:
-
-- `404 baseline_missing` — no `baselines/seed_{N}.json` file for the active seed. Run `make baselines` or commit the file.
 
 ### `GET /forecast`
 

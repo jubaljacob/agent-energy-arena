@@ -165,8 +165,9 @@ def _build_action_tools() -> list[dict[str, Any]]:
                 "Place a tile at (x, y). Civilian tiles must be adjacent to a road. "
                 "Coal, gas, and wind impose a one-cell no-build halo (roads and "
                 "batteries are admitted inside it). Returns ok=false with "
-                "error='no_road_adjacency' / 'spacing_violation' / 'occupied' / "
-                "'insufficient_funds' on rejection."
+                "error='unknown_tile_type' / 'out_of_bounds' / 'tile_occupied' / "
+                "'no_road_adjacency' / 'spacing_violation' / 'insufficient_funds' "
+                "on rejection."
             ),
             "parameters": {
                 "type": "object",
@@ -180,7 +181,16 @@ def _build_action_tools() -> list[dict[str, Any]]:
         },
         {
             "name": "demolish",
-            "description": "Remove the tile at (x, y). Refunds 25% of CAPEX.",
+            "description": (
+                "Remove the tile at (x, y). Refunds 25% of CAPEX. "
+                "Demolishing a road is rejected if it would orphan any "
+                "road-requiring tile (house / commercial / industrial / "
+                "refinery) from the town-hall road network — the response "
+                "is ok=false, error='would_disconnect', and result.stranded "
+                "lists the {x, y, type} of every tile that would be cut off. "
+                "Other rejections: 'out_of_bounds' / 'no_tile' / "
+                "'cannot_demolish_townhall'."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

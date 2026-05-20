@@ -27,11 +27,11 @@ llm = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["world*", "agents*", "scenarios*", "arena*"]
-exclude = ["world.tests*", "agents.tests*", "scenarios.tests*", "arena.tests*", "tests*", "submit*"]
+include = ["world*", "agents*", "scenarios*"]
+exclude = ["world.tests*", "agents.tests*", "scenarios.tests*", "submit*"]
 
 [tool.pytest.ini_options]
-testpaths = ["world/tests", "agents/tests", "scenarios/tests", "arena/tests", "tests"]
+testpaths = ["world/tests", "agents/tests", "scenarios/tests"]
 # `-m 'not live'` keeps `make check` offline — live tests need network +
 # vendor API keys. Opt in with `pytest -m live`.
 addopts = "-q -m 'not live'"
@@ -62,7 +62,7 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.11"
-files = ["world", "agents", "scenarios", "arena"]
+files = ["world", "agents", "scenarios"]
 strict_optional = true
 warn_unused_ignores = true
 warn_redundant_casts = true

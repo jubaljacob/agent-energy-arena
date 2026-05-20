@@ -542,15 +542,15 @@ def test_state_power_now_by_source_kw_populated() -> None:
 
 
 def test_blackout_decrements_treasury_per_hour() -> None:
-    """A 24-hour blackout costs 24 × $5,000 = $120,000."""
+    """A 24-hour blackout costs 24 × outage_penalty_hour (100% unserved)."""
     w = _fresh_world()
     # Pop=100, no plants → demand-only world. R=0 → blackout every hour.
     treasury_before = w.state.treasury
     w.step(days=1)
     # 24 blackout hours expected.
     assert w.state.today.blackout_hours == pytest.approx(24.0)
-    expected_penalty = 24 * w.config.blackout_penalty_hour
-    assert w.state.today.blackout_penalty == pytest.approx(expected_penalty)
+    expected_penalty = 24 * w.config.outage_penalty_hour
+    assert w.state.today.outage_penalty == pytest.approx(expected_penalty)
     # Net treasury delta = -penalty + tax_revenue (no plants → no opex/fuel/
     # power_revenue). Pop drops under the happiness-velocity model:
     # h=0 (24h blackout clipped) → velocity = 0.025·100·-1 = -2.5 → 97.5.
@@ -674,26 +674,33 @@ def test_step_size_invariance_with_plants() -> None:
 # -- Coal-proximity unhappiness ---------------------------------------------
 
 
-def test_coal_proximity_reduces_happiness_for_residences_within_3() -> None:
-    """0.05 × (residences_within_3 / max(1, residence_count)) deducted."""
+def test_coal_proximity_reduces_happiness_for_residences_within_5() -> None:
+    """0.05 × (residences_within_5 / max(1, residence_count)) deducted."""
     w = _fresh_world()
     cx, cy = w.config.world_w // 2, w.config.world_h // 2
+    # Neutralize ambient unemployment and no-parks drags so the test
+    # measures only the coal-proximity term.
+    w.state.population = 30.0  # = town_hall jobs → 0% unemployment.
+    _build_at(w, "park", cx - 8, cy - 8)  # far from everything → clears no-parks.
     # Place a house adjacent to town hall, then a coal plant within chebyshev
-    # 3 of *both* residences (cx+3 is 3 from town_hall and 2 from house).
+    # 5 of *both* residences (cx+4 is 4 from town_hall, 3 from house).
     w.build("house", cx + 1, cy)
-    _build_at(w, "coal_plant", cx + 3, cy)
+    _build_at(w, "coal_plant", cx + 4, cy)
     update_population(w)
-    # Both residences within 3: penalty = 0.05 * 2 / 2 = 0.05.
-    # Baseline happiness = 1.0 (no parks, no blackouts) - 0.05 = 0.95.
+    # Both residences within 5: penalty = 0.05 * 2 / 2 = 0.05.
+    # Baseline happiness = 1.0 (no parks near residences, no blackouts) - 0.05 = 0.95.
     assert w.state.happiness == pytest.approx(0.95)
 
 
-def test_coal_proximity_zero_when_no_houses_in_range() -> None:
+def test_coal_proximity_zero_when_no_residences_in_range() -> None:
     w = _fresh_world()
     cx, cy = w.config.world_w // 2, w.config.world_h // 2
+    w.state.population = 30.0
+    _build_at(w, "park", cx - 8, cy - 8)
     w.build("house", cx + 1, cy)
-    # Coal plant 5 cells away → chebyshev distance 5 > 3.
-    _build_at(w, "coal_plant", cx + 6, cy)
+    # Coal plant 7 cells from town_hall (cheb=7) and 6 from house (cheb=6);
+    # both past the cheb-5 proximity radius.
+    _build_at(w, "coal_plant", cx + 7, cy)
     update_population(w)
     assert w.state.happiness == pytest.approx(1.0)
 

@@ -14,9 +14,13 @@ from __future__ import annotations
 import pytest
 
 from world.population import (
+    COAL_GENERATION_HAPPINESS_COEF,
+    COAL_PROXIMITY_RADIUS,
     DAILY_TAX_PER_CAPITA,
     HAPPINESS_NEUTRAL,
     NEGATIVE_TREASURY_HAPPINESS_PENALTY,
+    NO_PARKS_HAPPINESS_PENALTY,
+    UNEMPLOYMENT_HAPPINESS_COEF,
     apply_structural_clamps,
     happiness_velocity,
     update_population,
@@ -29,6 +33,15 @@ def _fresh_world() -> World:
     w = World()
     w.reset(seed=42)
     return w
+
+
+def _clear_ambient_drags(w: World) -> None:
+    """Neutralize the no-parks and unemployment drags so tests can measure
+    a specific happiness term against a true h=1.0 baseline. Injects one
+    park far from (16,16) and any common test coord, and a jobs-only
+    tile that leaves the unemployed pool intact (staffed_jobs=0)."""
+    _inject_tile(w, type="park", x=29, y=29)
+    _inject_tile(w, type="commercial", x=28, y=28, jobs=10_000, housing_capacity=0, staffed_jobs=0)
 
 
 def _inject_tile(
@@ -209,6 +222,7 @@ def test_happy_city_grows_monotonically_over_30_ticks():
 def test_neutral_city_holds_population_over_30_ticks():
     """h=1.0 vanilla city (no parks, no penalties) sits at exactly its starting pop."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     _inject_tile(w, type="commercial", x=5, y=5, jobs=10_000, housing_capacity=10_000)
     w.state.population = 500.0
     for _ in range(30):
@@ -221,6 +235,7 @@ def test_neutral_city_holds_population_over_30_ticks():
 def test_unhappy_city_bleeds_along_closed_form():
     """h=0.7 with abundant headroom: pop_n+1 = pop_n · (1 + 0.025·(h−1))."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     _inject_tile(w, type="commercial", x=5, y=5, jobs=10_000, housing_capacity=10_000)
     # Drive happiness to 0.7 via 6h blackout (1.0 - 0.05·6 = 0.7).
     w.state.population = 1000.0
@@ -359,6 +374,7 @@ def test_drain_fires_newest_producer_when_unemployed_zero():
 def test_drain_silent_from_unemployed_when_buffer_exists():
     """Unhappy city with unemployed buffer → no firings."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     # Pad jobs so the structural idle drain never fires (jobs ≥ pop). The
     # injected commercial tile contributes its catalog demand but its
     # staffed_jobs is independent of pop; it just inflates the `jobs` total.
@@ -371,9 +387,9 @@ def test_drain_silent_from_unemployed_when_buffer_exists():
 
     # velocity = 0.025 · 100 · -0.4 = -1.0; pop_after = 99.0 → int=99.
     assert int(w.state.population) == 99
-    industrial = w.state.tiles[1]
+    industrial = next(t for t in w.state.tiles if t.type == "industrial")
     town_hall = _find_tile(w, "town_hall")
-    commercial = w.state.tiles[2]
+    commercial = next(t for t in w.state.tiles if t.type == "commercial" and t.x == 5)
     assert industrial.staffed_jobs == 30
     assert town_hall.staffed_jobs == 30
     assert commercial.staffed_jobs == 12
@@ -420,6 +436,7 @@ def test_tax_revenue_constant_per_capita():
 def test_first_park_within_chebyshev_2_of_house_contributes():
     """First park within cheb-2 of a house adds 0.10 happiness."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     _inject_tile(w, type="house", x=0, y=0, housing_capacity=10)
     # Park near each residence so the +0.10 contribution is uniform; this
     # AC pin documents the per-residence rule, not the averaging behavior.
@@ -433,6 +450,7 @@ def test_first_park_within_chebyshev_2_of_house_contributes():
 def test_park_outside_chebyshev_2_contributes_zero():
     """Park beyond chebyshev-2 of every residence contributes nothing."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     _inject_tile(w, type="house", x=0, y=0, housing_capacity=10)
     # Park is far from both house (5,5) at chebyshev=5, and town_hall (16,16)
     # at chebyshev=11.
@@ -445,6 +463,7 @@ def test_park_outside_chebyshev_2_contributes_zero():
 def test_park_benefit_caps_at_0_30_per_house():
     """min(0.30, 0.10 × nearby_parks): 4 parks cap at 0.30 per residence."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     _inject_tile(w, type="house", x=0, y=0, housing_capacity=10)
     # 4 parks near house, 4 near town_hall so both residences hit the cap.
     _inject_tile(w, type="park", x=1, y=1)
@@ -463,6 +482,7 @@ def test_park_benefit_caps_at_0_30_per_house():
 def test_park_benefit_zero_when_no_residences_have_nearby_parks():
     """Parks placed far from every residence contribute 0."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     # 50 parks along y=0, x=0..49. Town_hall at (16,16) → cheb dist to any
     # of these parks is min(16-x, x-16, 16) ≥ 14 for x ∈ [0,49]; well past
     # cheb-2. No house tile, so the only residence is the town_hall.
@@ -476,6 +496,7 @@ def test_park_benefit_zero_when_no_residences_have_nearby_parks():
 def test_industrial_adjacent_to_house_drops_happiness():
     """Industrial within cheb-2 of a residence: -0.03 noise on that residence."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     _inject_tile(w, type="house", x=0, y=0, housing_capacity=10)
     # Industrial near house only; town_hall is far away. With 2 residences
     # the mean noise is (0.03 + 0)/2 = 0.015 → h = 0.985.
@@ -488,6 +509,7 @@ def test_industrial_adjacent_to_house_drops_happiness():
 def test_park_between_industrial_and_house_halves_penalty():
     """Park within cheb-2 of both residence and source halves noise to -0.015."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     _inject_tile(w, type="house", x=0, y=0, housing_capacity=10)
     _inject_tile(w, type="industrial", x=2, y=2, jobs=5)
     _inject_tile(w, type="park", x=1, y=1)
@@ -502,6 +524,7 @@ def test_park_between_industrial_and_house_halves_penalty():
 def test_refinery_counts_as_noise_source():
     """Refinery contributes -0.03 like industrial, on the affected residence."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     _inject_tile(w, type="house", x=0, y=0, housing_capacity=10)
     _inject_tile(w, type="refinery", x=2, y=0, jobs=25)
 
@@ -513,6 +536,7 @@ def test_refinery_counts_as_noise_source():
 def test_noise_averaged_over_multiple_residences():
     """Noise is mean over residences, not sum."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     _inject_tile(w, type="house", x=0, y=0, housing_capacity=10)
     _inject_tile(w, type="house", x=10, y=10, housing_capacity=10)
     _inject_tile(w, type="industrial", x=1, y=1, jobs=5)
@@ -526,6 +550,7 @@ def test_noise_averaged_over_multiple_residences():
 def test_blackout_hours_lower_happiness():
     """Per-hour blackout coefficient is 0.05."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     w.state.yesterday_blackout_hours = 6.0
     update_population(w)
     assert w.state.happiness == pytest.approx(0.7)
@@ -534,6 +559,7 @@ def test_blackout_hours_lower_happiness():
 def test_brownout_hours_lower_happiness():
     """Per-hour brownout coefficient is 0.02."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     w.state.yesterday_brownout_hours = 24.0
     update_population(w)
     assert w.state.happiness == pytest.approx(0.52)
@@ -558,6 +584,7 @@ def test_negative_treasury_penalty_constant_is_0_20():
 def test_positive_treasury_applies_no_penalty():
     """Treasury >= 0 → happiness matches baseline (no penalty)."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     w.state.treasury = 1.0  # positive
     update_population(w)
     # Baseline: no parks, no noise, no outages, no coal → h=1.0.
@@ -567,6 +594,7 @@ def test_positive_treasury_applies_no_penalty():
 def test_zero_treasury_applies_no_penalty():
     """Treasury exactly 0 is not negative → no penalty."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     w.state.treasury = 0.0
     update_population(w)
     assert w.state.happiness == pytest.approx(1.0)
@@ -575,6 +603,7 @@ def test_zero_treasury_applies_no_penalty():
 def test_negative_treasury_drops_happiness_by_exactly_0_20():
     """Treasury < 0 → exactly 0.20 subtracted before the [0, 1.5] clamp."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     w.state.treasury = -1.0
     update_population(w)
     assert w.state.happiness == pytest.approx(0.80)
@@ -583,10 +612,12 @@ def test_negative_treasury_drops_happiness_by_exactly_0_20():
 def test_negative_treasury_penalty_does_not_scale_with_depth():
     """Penalty is flat: -$1 and -$1,000,000 produce the same 0.20 drop."""
     w_shallow = _fresh_world()
+    _clear_ambient_drags(w_shallow)
     w_shallow.state.treasury = -1.0
     update_population(w_shallow)
 
     w_deep = _fresh_world()
+    _clear_ambient_drags(w_deep)
     w_deep.state.treasury = -1_000_000.0
     update_population(w_deep)
 
@@ -597,6 +628,7 @@ def test_negative_treasury_penalty_does_not_scale_with_depth():
 def test_negative_treasury_penalty_does_not_scale_with_duration():
     """Sustained negative treasury → same flat 0.20 every day (no accumulation)."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     # Park keeps things lively; tax revenue is small so treasury stays negative.
     _inject_tile(w, type="commercial", x=5, y=5, jobs=10_000, housing_capacity=10_000)
     w.state.population = 100.0
@@ -610,6 +642,7 @@ def test_negative_treasury_penalty_does_not_scale_with_duration():
 def test_negative_to_nonnegative_transition_removes_penalty_immediately():
     """The day treasury returns >= 0, the penalty is gone — no lingering effect."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     w.state.treasury = -1.0
     update_population(w)
     assert w.state.happiness == pytest.approx(0.80)
@@ -628,6 +661,7 @@ def test_negative_treasury_penalty_applied_before_lower_clamp():
     push happiness negative.
     """
     w = _fresh_world()
+    _clear_ambient_drags(w)
     w.state.treasury = -1.0
     w.state.yesterday_blackout_hours = 10_000.0
     update_population(w)
@@ -638,6 +672,7 @@ def test_negative_treasury_penalty_applied_before_upper_clamp():
     """At the upper clamp boundary, a -0.20 step is visible (it doesn't
     silently push above the cap)."""
     w = _fresh_world()
+    _clear_ambient_drags(w)
     _inject_tile(w, type="house", x=0, y=0, housing_capacity=10)
     # Four parks within cheb-2 of house AND four near town_hall so the
     # per-residence cap fires at both → average +0.30. h_raw = 1.30.
@@ -654,6 +689,158 @@ def test_negative_treasury_penalty_applied_before_upper_clamp():
     update_population(w)
     # 1.30 - 0.20 = 1.10, well inside the cap.
     assert w.state.happiness == pytest.approx(1.10)
+
+
+# -- Unemployment happiness drag (R1) ---------------------------------------
+
+
+def test_unemployment_constant_is_0_15():
+    assert UNEMPLOYMENT_HAPPINESS_COEF == 0.15
+
+
+def test_full_employment_applies_no_drag():
+    """jobs >= pop → unemployment_rate = 0 → no drag."""
+    w = _fresh_world()
+    _inject_tile(w, type="park", x=29, y=29)  # clear no-parks penalty only
+    _inject_tile(w, type="commercial", x=28, y=28, jobs=200, housing_capacity=0, staffed_jobs=0)
+    w.state.population = 100.0
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0)
+
+
+def test_partial_unemployment_drags_proportionally():
+    """At 40% idle, drag = 0.15 × 0.4 = 0.06."""
+    w = _fresh_world()
+    _inject_tile(w, type="park", x=29, y=29)  # clear no-parks penalty only
+    # town_hall has jobs=30. Inject 30 more → 60 total jobs, pop=100 → 40 idle.
+    _inject_tile(w, type="commercial", x=28, y=28, jobs=30, housing_capacity=0, staffed_jobs=0)
+    w.state.population = 100.0
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0 - 0.15 * 0.4)
+
+
+def test_full_unemployment_caps_drag_at_coefficient():
+    """0 jobs (pop > 0) → drag = full coefficient."""
+    w = _fresh_world()
+    _inject_tile(w, type="park", x=29, y=29)
+    # Strip the town_hall's jobs by overwriting; no other job sources.
+    for t in w.state.tiles:
+        if t.type == "town_hall":
+            t.jobs = 0
+            t.staffed_jobs = 0
+    w.state.population = 100.0
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0 - UNEMPLOYMENT_HAPPINESS_COEF)
+
+
+def test_unemployment_drag_zero_when_population_zero():
+    """Pop=0 (ghost city) → no division by zero, drag = 0."""
+    w = _fresh_world()
+    _inject_tile(w, type="park", x=29, y=29)
+    w.state.population = 0.0
+    update_population(w)
+    # Treasury is positive (starting cash); base 1.0, no other terms fire.
+    assert w.state.happiness == pytest.approx(1.0)
+
+
+# -- No-parks flat penalty (R2) ---------------------------------------------
+
+
+def test_no_parks_penalty_constant_is_0_05():
+    assert NO_PARKS_HAPPINESS_PENALTY == 0.05
+
+
+def test_zero_parks_anywhere_drops_happiness():
+    """Bare world (no parks) takes a flat -0.05 drag."""
+    w = _fresh_world()
+    # Neutralize unemployment but leave no-parks active.
+    _inject_tile(w, type="commercial", x=28, y=28, jobs=10_000, housing_capacity=0, staffed_jobs=0)
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0 - NO_PARKS_HAPPINESS_PENALTY)
+
+
+def test_one_park_anywhere_clears_no_parks_penalty():
+    """One park (even far from every residence) removes the penalty."""
+    w = _fresh_world()
+    _inject_tile(w, type="commercial", x=28, y=28, jobs=10_000, housing_capacity=0, staffed_jobs=0)
+    _inject_tile(w, type="park", x=29, y=29)  # far from town_hall (16,16)
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0)
+
+
+# -- Coal-share-of-generation drag (R3 weighting) ---------------------------
+
+
+def test_coal_share_coef_is_0_05():
+    assert COAL_GENERATION_HAPPINESS_COEF == 0.05
+
+
+def test_full_coal_generation_drags_by_coef():
+    """100% coal share of today's served kWh → full -0.05 drag."""
+    w = _fresh_world()
+    _clear_ambient_drags(w)
+    # Synthesize 1000 kWh of coal generation on a single plant; today.coal_kwh
+    # matches. No other plants → 100% coal share.
+    coal = next((t for t in w.state.tiles if t.type == "coal_plant"), None)
+    if coal is None:
+        _inject_tile(w, type="coal_plant", x=10, y=10, jobs=30)
+        coal = next(t for t in w.state.tiles if t.type == "coal_plant")
+    coal.kwh_served_today = 1000.0
+    w.state.today.coal_kwh = 1000.0
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0 - COAL_GENERATION_HAPPINESS_COEF)
+
+
+def test_zero_generation_today_zero_coal_drag():
+    """today.coal_kwh = 0 → no drag (avoid div-by-zero / phantom share)."""
+    w = _fresh_world()
+    _clear_ambient_drags(w)
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0)
+
+
+def test_mixed_generation_dilutes_coal_drag():
+    """Half coal / half gas → drag = 0.05 × 0.5."""
+    w = _fresh_world()
+    _clear_ambient_drags(w)
+    _inject_tile(w, type="coal_plant", x=10, y=10, jobs=30)
+    _inject_tile(w, type="gas_plant", x=12, y=10, jobs=10)
+    coal = next(t for t in w.state.tiles if t.type == "coal_plant")
+    gas_tile = next(t for t in w.state.tiles if t.type == "gas_plant")
+    coal.kwh_served_today = 500.0
+    gas_tile.kwh_served_today = 500.0
+    w.state.today.coal_kwh = 500.0
+    w.state.today.gas_kwh = 500.0
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0 - 0.05 * 0.5)
+
+
+# -- Coal-proximity radius (R3 widened to cheb-5) ---------------------------
+
+
+def test_coal_proximity_radius_constant_is_5():
+    assert COAL_PROXIMITY_RADIUS == 5
+
+
+def test_coal_plant_within_cheb5_of_residence_drags_happiness():
+    """Coal plant 5 tiles from town_hall fires the proximity term."""
+    w = _fresh_world()
+    _clear_ambient_drags(w)
+    # Town_hall at (16,16); coal at (21,16) → chebyshev=5, on the edge.
+    _inject_tile(w, type="coal_plant", x=21, y=16, jobs=30)
+    update_population(w)
+    # 1 residence within range / 1 residence (town_hall) → penalty = 0.05.
+    # Coal share fires too (only this plant → no kWh today → 0 share).
+    assert w.state.happiness == pytest.approx(0.95)
+
+
+def test_coal_plant_outside_cheb5_no_proximity_drag():
+    """Coal plant 6 tiles away does not fire the proximity term."""
+    w = _fresh_world()
+    _clear_ambient_drags(w)
+    _inject_tile(w, type="coal_plant", x=22, y=16, jobs=30)  # cheb=6 from (16,16)
+    update_population(w)
+    assert w.state.happiness == pytest.approx(1.0)
 
 
 # -- State surface -----------------------------------------------------------

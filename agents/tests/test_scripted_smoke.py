@@ -12,7 +12,7 @@ from agents.scripted import ScriptedAgent
 from world.api import create_app
 from world.sim import World
 
-BASELINE_PATH = Path(__file__).resolve().parent.parent.parent / "baselines" / "seed_42.json"
+BASELINE_PATH = Path(__file__).resolve().parent / "scripted_seed_42.json"
 
 
 def _make_client(world: World) -> TestClient:
@@ -61,10 +61,11 @@ def test_scripted_is_deterministic_across_runs() -> None:
 
 def test_scripted_matches_committed_baseline() -> None:
     """Re-run the scripted agent on seed 42 and assert (P, T) are within 5% of
-    the committed `baselines/seed_42.json`. If the agent's strategy is changed
-    intentionally, regenerate the baseline via:
+    the committed `agents/tests/scripted_seed_42.json`. If the agent's strategy
+    is changed intentionally, regenerate the baseline via:
 
-        python -m agents.scripted.agent --seed 42 --output baselines/seed_42.json
+        python -m agents.scripted.agent --seed 42 \
+            --output agents/tests/scripted_seed_42.json
     """
     payload = json.loads(BASELINE_PATH.read_text())
     p_ref = float(payload["p_ref"])

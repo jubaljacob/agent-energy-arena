@@ -36,7 +36,8 @@ class Config:
     grid_price_retail: float
     grid_price_export: float
     base_growth_rate: float
-    blackout_penalty_hour: float
+    outage_penalty_hour: float
+    brownout_flat_penalty_hour: float
     industrial_process_co2_t_per_day: float
     api_port: int
     llm_base_url: str
@@ -60,7 +61,8 @@ def load_config() -> Config:
         grid_price_retail=_float("GRID_PRICE_RETAIL", 0.08),
         grid_price_export=_float("GRID_PRICE_EXPORT", 0.04),
         base_growth_rate=_float("BASE_GROWTH_RATE", 0.025),
-        blackout_penalty_hour=_float("BLACKOUT_PENALTY_HOUR", 5000),
+        outage_penalty_hour=_float("OUTAGE_PENALTY_HOUR", 4000),
+        brownout_flat_penalty_hour=_float("BROWNOUT_FLAT_PENALTY_HOUR", 1000),
         industrial_process_co2_t_per_day=_float("INDUSTRIAL_PROCESS_CO2_T_PER_DAY", 2.0),
         api_port=_int("API_PORT", 8000),
         llm_base_url=_str("LLM_BASE_URL", "https://api.openai.com/v1"),

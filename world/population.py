@@ -7,7 +7,11 @@ A single end-of-day routine, `update_population(world)`, that:
      residential tiles — both `town_hall` and `house` count), a noise
      penalty from industrial/refinery tiles near those residences
      (halved by an intervening park), prior-day blackout + brownout
-     hours, and a coal-proximity term.
+     hours, a coal-proximity term (residences within cheb-5 of an
+     operational coal plant), a coal-share-of-generation term (today's
+     coal kWh as a fraction of total served), a mild unemployment
+     drag, a flat no-parks penalty, and a flat negative-treasury
+     penalty.
   3. Calls `happiness_velocity` (signed daily delta around the
      neutral happiness fixed-point of 1.0) and `apply_structural_clamps`
      (housing exodus + jobs floor backstops) as pure helpers.
@@ -43,6 +47,29 @@ BROWNOUT_HAPPINESS_PER_HOUR: float = 0.02
 # (+0.30/house) down to a near-neutral +0.10 net, so debt cannot be
 # silently cancelled by minimal park placement.
 NEGATIVE_TREASURY_HAPPINESS_PENALTY: float = 0.20
+
+# Mild happiness drag scaling with unemployment rate `(pop - jobs)/pop`.
+# Caps at the coefficient when there are zero jobs; pulls happiness
+# below the neutral fixed-point even before the idle out-migration
+# clamp fires, so a jobs deficit shows up in the velocity model.
+UNEMPLOYMENT_HAPPINESS_COEF: float = 0.15
+
+# Flat penalty when the city has zero parks anywhere on the map. A
+# minimum civic-services prod that breaks the "do nothing" equilibrium
+# without changing the velocity neutral point. Placing a single park
+# (anywhere) clears it.
+NO_PARKS_HAPPINESS_PENALTY: float = 0.05
+
+# Per-day coefficient on the coal share of today's served energy. At
+# 100% coal generation this contributes -0.05; combined with the spatial
+# coal-proximity term (also up to -0.05) the worst case is ~-0.10.
+COAL_GENERATION_HAPPINESS_COEF: float = 0.05
+
+# Chebyshev radius for the spatial coal-proximity term. Widened from 3
+# so the starter coal_plant (which sits ~8 tiles from town_hall on the
+# default grid) actually fires on at least nearby residences as the
+# city grows past the town hall.
+COAL_PROXIMITY_RADIUS: int = 5
 
 # Velocity model anchors (PRD §"Implementation Decisions").
 HAPPINESS_NEUTRAL: float = 1.0
@@ -107,8 +134,10 @@ def update_population(world: World) -> None:
     noise_sources = [t for t in state.tiles if t.type in ("industrial", "refinery")]
 
     coal_plants = [t for t in state.tiles if t.type == "coal_plant" and t.operational]
-    coal_residences_within_3 = sum(
-        1 for h in residences if any(max(abs(h.x - c.x), abs(h.y - c.y)) <= 3 for c in coal_plants)
+    coal_residences_in_range = sum(
+        1
+        for h in residences
+        if any(max(abs(h.x - c.x), abs(h.y - c.y)) <= COAL_PROXIMITY_RADIUS for c in coal_plants)
     )
 
     park_benefit = 0.0
@@ -131,12 +160,25 @@ def update_population(world: World) -> None:
         park_benefit = bonus_total / residence_count
         noise_penalty = penalty_total / residence_count
 
+    pop_int = int(state.population)
+    unemployment_rate = max(0.0, (pop_int - jobs)) / pop_int if pop_int > 0 else 0.0
+
+    # `today.coal_kwh` is the day's coal generation; total served kWh is
+    # summed across plant tiles. Both are valid at this point in the
+    # day-loop (after pin_yesterday, before the day-counter increment).
+    total_kwh_today = sum(t.kwh_served_today for t in state.tiles)
+    coal_share_today = state.today.coal_kwh / total_kwh_today if total_kwh_today > 0 else 0.0
+
     happiness = 1.0
     happiness += park_benefit
     happiness -= noise_penalty
     happiness -= BLACKOUT_HAPPINESS_PER_HOUR * state.yesterday_blackout_hours
     happiness -= BROWNOUT_HAPPINESS_PER_HOUR * state.yesterday_brownout_hours
-    happiness -= 0.05 * coal_residences_within_3 / max(1, residence_count)
+    happiness -= 0.05 * coal_residences_in_range / max(1, residence_count)
+    happiness -= COAL_GENERATION_HAPPINESS_COEF * coal_share_today
+    happiness -= UNEMPLOYMENT_HAPPINESS_COEF * unemployment_rate
+    if not parks:
+        happiness -= NO_PARKS_HAPPINESS_PENALTY
     if state.treasury < 0:
         happiness -= NEGATIVE_TREASURY_HAPPINESS_PENALTY
     happiness = max(0.0, min(1.5, happiness))

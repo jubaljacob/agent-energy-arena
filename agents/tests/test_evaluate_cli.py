@@ -1,13 +1,8 @@
-"""Replay roundtrip + evaluate.py CLI smoke tests.
-
-The replay contract: given the same seed and the same logged action
-sequence, a fresh world ends up byte-identical to the recorded final
-state.  These tests pin that contract on a short scripted run so the
-suite stays fast (~2 s per test).
+"""evaluate.py CLI smoke tests.
 
 The scripted agent's strategy is mostly bootstrap-only on a 30-day
-window — that's the point: a small but non-trivial action log
-(builds + steps) is enough to exercise dispatch through evaluate.py.
+window — that's the point: a small but non-trivial run is enough to
+exercise the CLI end-to-end without inflating suite runtime.
 """
 
 from __future__ import annotations
@@ -16,14 +11,8 @@ import json
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 import evaluate
-from agents.api_client import ApiClient
-from agents.scripted import ScriptedAgent
-from world.action_log import ActionLog
-from world.api import create_app
-from world.sim import World
 
 
 def _short_game(monkeypatch: pytest.MonkeyPatch, days: int = 30) -> None:
@@ -32,58 +21,12 @@ def _short_game(monkeypatch: pytest.MonkeyPatch, days: int = 30) -> None:
     monkeypatch.setenv("MANUAL_GAME_DAYS", str(days))
 
 
-def _run_scripted(runs_root: Path, seed: int = 42) -> tuple[Path, dict]:
-    """Run the scripted agent in-process and return (run_dir, final_state)."""
-    # Match the production path's starter grid so `evaluate.cmd_replay`
-    # (which uses `_make_inprocess_client`, also with the starter grid)
-    # rehydrates to the same baseline as the original run.
-    world = World(seed_starter_grid=True)
-    log = ActionLog(root=runs_root)
-    app = create_app(world=world, action_log=log)
-    api = ApiClient(transport=TestClient(app))
-    agent = ScriptedAgent(api, seed=seed)
-    final = agent.play_game()
-    return log.dir, final
-
-
-def test_replay_roundtrip_short_game(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run scripted for 30 days, replay the action log, assert state equality."""
-    _short_game(monkeypatch, days=30)
-    runs_root = tmp_path / "runs"
-
-    run_dir, original_final = _run_scripted(runs_root, seed=42)
-    (run_dir / "final_state.json").write_text(
-        json.dumps(original_final, sort_keys=True, default=str) + "\n"
-    )
-
-    actions = (run_dir / "actions.jsonl").read_text().splitlines()
-    assert any('"endpoint": "/reset"' in line for line in actions)
-    assert any('"endpoint": "/step"' in line for line in actions)
-    assert any('"endpoint": "/build"' in line for line in actions)
-
-    rc = evaluate.cmd_replay(run_dir)
-    assert rc == 0
-
-
-def test_replay_detects_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """If final_state.json is mutated, cmd_replay returns 1."""
-    _short_game(monkeypatch, days=30)
-    runs_root = tmp_path / "runs"
-
-    run_dir, final = _run_scripted(runs_root, seed=42)
-    drifted = dict(final)
-    drifted["population"] = int(drifted["population"]) + 999
-    (run_dir / "final_state.json").write_text(json.dumps(drifted, sort_keys=True, default=str))
-
-    assert evaluate.cmd_replay(run_dir) == 1
-
-
 def test_evaluate_cli_runs_submit_agent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`python evaluate.py --agent submit.agent --seed 42` runs end-to-end.
+    """`python evaluate.py --agent agents.scripted --seed 42` runs end-to-end.
 
     Output is a single JSON line carrying the score breakdown (or null
     if no baseline exists for the seed); exit code is 0 on a clean run.
@@ -91,42 +34,43 @@ def test_evaluate_cli_runs_submit_agent(
     _short_game(monkeypatch, days=30)
     monkeypatch.chdir(tmp_path)
 
-    rc = evaluate.main(["--agent", "submit.agent", "--seed", "42"])
+    rc = evaluate.main(["--agent", "agents.scripted", "--seed", "42"])
     assert rc == 0
 
     line = capsys.readouterr().out.strip().splitlines()[-1]
     payload = json.loads(line)
-    assert payload["agent"] == "submit.agent"
+    assert payload["agent"] == "agents.scripted"
     assert payload["seed"] == 42
     assert "run_id" in payload
 
     run_dir = tmp_path / "runs" / payload["run_id"]
     assert (run_dir / "actions.jsonl").exists()
     assert (run_dir / "final_state.json").exists()
-
-    # Smoke: round-trip the just-written run via evaluate.cmd_replay.
-    assert evaluate.cmd_replay(run_dir) == 0
+    assert (run_dir / "states.jsonl").exists()
 
 
-def test_evaluate_replay_cli(
+def test_evaluate_score_cli(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`python evaluate.py --replay <run_dir>` mirrors cmd_replay's exit code."""
+    """`python evaluate.py --score <run_dir>` prints the score breakdown."""
     _short_game(monkeypatch, days=30)
     monkeypatch.chdir(tmp_path)
 
-    rc = evaluate.main(["--agent", "submit.agent", "--seed", "42"])
+    rc = evaluate.main(["--agent", "agents.scripted", "--seed", "42"])
     assert rc == 0
     line = capsys.readouterr().out.strip().splitlines()[-1]
     run_dir = tmp_path / "runs" / json.loads(line)["run_id"]
 
-    rc2 = evaluate.main(["--replay", str(run_dir)])
+    rc2 = evaluate.main(["--score", str(run_dir)])
     assert rc2 == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "score" in payload
+    assert "n_days" in payload
 
 
-def test_evaluate_requires_agent_or_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_evaluate_requires_agent_or_score(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit):
         evaluate.main([])
@@ -140,8 +84,8 @@ def test_evaluate_cli_with_scenario_flag(
     """`--scenario scenarios.grid_stress` attaches the scenario for the run.
 
     The scenario dotted path lands in `metadata.json` for the post-reset
-    recorder; `--replay` reads the field and re-attaches before driving
-    the action log so the replay matches the recorded final state.
+    recorder, and the heatwave it schedules shows up in the recorded
+    final state — observable proof that the day-loop hook fired.
     """
     _short_game(monkeypatch, days=30)
     monkeypatch.chdir(tmp_path)
@@ -149,7 +93,7 @@ def test_evaluate_cli_with_scenario_flag(
     rc = evaluate.main(
         [
             "--agent",
-            "submit.agent",
+            "agents.scripted",
             "--seed",
             "42",
             "--scenario",
@@ -166,14 +110,58 @@ def test_evaluate_cli_with_scenario_flag(
 
     # The grid-stress scenario fires a heatwave on day 10 with a 5-day
     # duration (see scenarios/grid_stress.py). Over a 30-day run that
-    # event ends and lands in `historical_events`, so its presence in
-    # the recorded final state is observable proof that the day-loop
-    # hook actually ran the scenario.
+    # event ends and lands in `historical_events`.
     final = json.loads((run_dir / "final_state.json").read_text())
     historical = final.get("historical_events", [])
     assert any(ev.get("type") == "heatwave" and ev.get("started_day") == 10 for ev in historical)
 
-    assert evaluate.cmd_replay(run_dir) == 0
+
+def test_evaluate_cli_with_time_budget_finishes_under_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A scripted-agent 30-day run completes well under a 60s budget.
+
+    The output line carries the four budget-feature keys; days_advanced
+    equals game_days; time_scaled_score equals the raw score (× 1.0).
+    """
+    _short_game(monkeypatch, days=30)
+    monkeypatch.chdir(tmp_path)
+
+    rc = evaluate.main(["--agent", "agents.scripted", "--seed", "42", "--time-budget", "60"])
+    assert rc == 0
+
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["time_budget_seconds"] == 60
+    assert payload["days_advanced"] == 30
+    assert payload["wall_time_seconds"] > 0.0
+    assert payload["wall_time_seconds"] < 60.0
+    raw = float(payload["score"]["score"])
+    assert payload["time_scaled_score"] == pytest.approx(raw)
+
+
+def test_evaluate_cli_zero_time_budget_cuts_run_immediately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`--time-budget 0` trips the deadline on the first ApiClient call.
+
+    The agent's play_game starts with /reset which raises BudgetExpired;
+    evaluate.py catches it, reads the un-reset world state, and emits
+    days_advanced=0 with time_scaled_score=0.0.
+    """
+    _short_game(monkeypatch, days=30)
+    monkeypatch.chdir(tmp_path)
+
+    rc = evaluate.main(["--agent", "agents.scripted", "--seed", "42", "--time-budget", "0"])
+    assert rc == 0
+
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["time_budget_seconds"] == 0
+    assert payload["days_advanced"] == 0
+    assert payload["time_scaled_score"] == 0.0
 
 
 def test_evaluate_cli_without_scenario_records_null(
@@ -183,13 +171,13 @@ def test_evaluate_cli_without_scenario_records_null(
 ) -> None:
     """Omitting `--scenario` leaves the metadata scenario field null.
 
-    The default `NullScenario` is observably a no-op (slice 02), so the
-    behavior matches a bare run.
+    The default `NullScenario` is observably a no-op, so the behavior
+    matches a bare run.
     """
     _short_game(monkeypatch, days=30)
     monkeypatch.chdir(tmp_path)
 
-    rc = evaluate.main(["--agent", "submit.agent", "--seed", "42"])
+    rc = evaluate.main(["--agent", "agents.scripted", "--seed", "42"])
     assert rc == 0
 
     line = capsys.readouterr().out.strip().splitlines()[-1]

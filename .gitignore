@@ -4,6 +4,8 @@ __pycache__/
 venv/
 .env
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 *.egg-info/
 build/
 dist/
@@ -13,3 +15,5 @@ runs/
 *.jsonl
 
 .scratch
+
+ralph/

@@ -105,7 +105,7 @@ class DayLedger(BaseModel):
 
       * **Rollups** — float fields summed across the day's 24 ticks and
         end-of-day phases (``power_revenue``, ``opex``, ``fuel_cost``,
-        ``co2_emitted_t``, ``blackout_hours``, ``blackout_penalty``, ...).
+        ``co2_emitted_t``, ``blackout_hours``, ``outage_penalty``, ...).
         The day's ``treasury`` delta is derived from these.
       * **Per-hour accumulators** — dict/list fields written by
         ``commit_tick`` across the 24 ticks and consumed by end-of-day
@@ -136,7 +136,7 @@ class DayLedger(BaseModel):
     refined_bbl: float = 0.0
     blackout_hours: float = 0.0
     brownout_hours: float = 0.0
-    blackout_penalty: float = 0.0
+    outage_penalty: float = 0.0
     renewable_share: float = 0.0
     injection_kw: float = 0.0
     production_kw: float = 0.0
@@ -147,7 +147,7 @@ class DayLedger(BaseModel):
     # Several existing float rollups above are *also* per-hour accumulators
     # (``power_revenue``, ``coal_kwh``, ``gas_kwh``, ``injection_kw``,
     # ``production_kw``, ``blackout_hours``, ``brownout_hours``,
-    # ``blackout_penalty``). They live in the rollup section because the
+    # ``outage_penalty``). They live in the rollup section because the
     # end-of-day total equals the per-hour sum — no separate aggregation.
     # The fields below are dict/list shapes that have no equivalent float
     # rollup; they only exist as per-hour accumulators.

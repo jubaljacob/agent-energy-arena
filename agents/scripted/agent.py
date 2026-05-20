@@ -17,7 +17,7 @@ capacity → carbon-driven coal demolition → reservoir re-exploration →
 drilling → refinery → DR-injection siting → skip.
 
 Run end-to-end via `python -m agents.scripted.agent --seed 42 --output
-baselines/seed_42.json` to write the baseline file consumed by
+agents/tests/scripted_seed_42.json` to write the baseline file consumed by
 `/score`.
 """
 

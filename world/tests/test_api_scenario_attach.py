@@ -9,21 +9,16 @@ ACs covered:
     world has no recorder (test default).
   * POST /reset accepts an optional `scenario` field; invalid path
     surfaces 400 + log; valid path attaches.
-  * Action-log replay reproduces a session with mid-game scenario
-    attach + matches recorded final_state byte-for-byte.
 """
 
 from __future__ import annotations
 
-import contextlib
 import json
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import evaluate
-from agents.api_client import ApiClient
 from world.action_log import ActionLog
 from world.api import create_app
 from world.scenario import NullScenario
@@ -226,70 +221,14 @@ def test_get_run_reflects_reset_reallocation(tmp_path: Path) -> None:
     assert (Path(world.runs_root or "runs") / first_id).exists()
 
 
-# -- Replay byte-identity with mid-game scenario attach --------------------
-
-
-def test_replay_reproduces_session_with_mid_game_scenario_attach(
-    tmp_path: Path,
-) -> None:
-    runs_root = tmp_path / "runs"
-    # Replay (`evaluate.cmd_replay`) rebuilds the world via
-    # `_make_inprocess_client`, which opts in to the starter grid.
-    # The original run must match.
-    world = World(runs_root=str(runs_root), seed_starter_grid=True)
-    run_id = world.recorder.run_id if world.recorder is not None else None
-    log = ActionLog(root=str(runs_root), run_id=run_id)
-    app = create_app(world=world, action_log=log, runs_root=str(runs_root))
-    api = ApiClient(transport=TestClient(app))
-
-    api.reset(seed=42)
-    api.step(days=1)
-    api.attach_scenario(FIXTURE_PATH)
-    api.step(days=2)
-
-    assert world.recorder is not None
-    run_dir = world.recorder.dir
-    final = api.state()
-    (run_dir / "final_state.json").write_text(json.dumps(final, sort_keys=True, default=str) + "\n")
-
-    # Replay into a sibling temp dir using evaluate.cmd_replay — same code
-    # path the eval CLI exposes. Byte-identical match → rc == 0.
-    rc = evaluate.cmd_replay(run_dir)
-    assert rc == 0
-
-
-def test_replay_reproduces_reset_with_scenario(tmp_path: Path) -> None:
-    runs_root = tmp_path / "runs"
-    # See sibling replay test: match the cmd_replay starter-grid setup.
-    world = World(runs_root=str(runs_root), seed_starter_grid=True)
-    run_id = world.recorder.run_id if world.recorder is not None else None
-    log = ActionLog(root=str(runs_root), run_id=run_id)
-    app = create_app(world=world, action_log=log, runs_root=str(runs_root))
-    api = ApiClient(transport=TestClient(app))
-
-    api.reset(seed=42, scenario=FIXTURE_PATH)
-    api.step(days=3)
-
-    assert world.recorder is not None
-    run_dir = world.recorder.dir
-    final = api.state()
-    (run_dir / "final_state.json").write_text(json.dumps(final, sort_keys=True, default=str) + "\n")
-
-    assert evaluate.cmd_replay(run_dir) == 0
-
-
 # -- Hygiene ---------------------------------------------------------------
 
 
 def test_post_scenario_is_idempotent_for_same_path(tmp_path: Path) -> None:
-    client, app, world, _log = _client(tmp_path)
+    client, _app, world, _log = _client(tmp_path)
     client.post("/scenario", json={"dotted_path": FIXTURE_PATH})
     first_class = type(world.scenario)
     r = client.post("/scenario", json={"dotted_path": FIXTURE_PATH})
     assert r.status_code == 200
     # Re-attaching the same scenario is a fresh instance of the same class.
     assert type(world.scenario) is first_class
-    # Suppress unused import; contextlib only here to mirror evaluate.py
-    # style — no exception expected in this path.
-    with contextlib.suppress(RuntimeError):
-        pass

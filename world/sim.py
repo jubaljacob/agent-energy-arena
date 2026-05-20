@@ -220,7 +220,8 @@ class World:
             industrial_revenue_per_day=INDUSTRIAL_REVENUE_PER_DAY,
             commercial_revenue_per_resident_per_day=COMMERCIAL_REVENUE_PER_RESIDENT_PER_DAY,
             daily_tax_per_capita=DAILY_TAX_PER_CAPITA,
-            blackout_penalty_hour=self.config.blackout_penalty_hour,
+            outage_penalty_hour=self.config.outage_penalty_hour,
+            brownout_flat_penalty_hour=self.config.brownout_flat_penalty_hour,
             plant_fuel_cost_per_mwh={
                 "coal_plant": TILE_CATALOG["coal_plant"].fuel_cost_per_mwh,
                 "gas_peaker": TILE_CATALOG["gas_peaker"].fuel_cost_per_mwh,

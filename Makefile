@@ -1,4 +1,4 @@
-# Feedback loops for the Energy-AI Nexus simulator.
+# Feedback loops for the Agent Energy Arena.
 #
 # `make check` is the canonical "is it ready to commit?" gate. CI and the
 # AFK agent loop should both run this. Individual targets exist for fast
@@ -11,7 +11,7 @@ PYTHON ?= $(shell \
 	elif [ -x ".venv/bin/python" ]; then echo ".venv/bin/python"; \
 	else echo python3; fi)
 
-.PHONY: help venv install test typecheck lint format format-check check serve play eval score baselines clean
+.PHONY: help venv install test typecheck lint format format-check check serve play eval score clean
 
 help:
 	@echo "Targets:"
@@ -27,7 +27,6 @@ help:
 	@echo "  play          docker compose up — world + UI at :8000"
 	@echo "  eval          docker compose --profile eval run agent — score submit/agent.py"
 	@echo "  score         Run the scripted agent on seed 42 and print the score line"
-	@echo "  baselines     Regenerate per-scenario scripted-agent baselines under baselines/arena/"
 
 venv:
 	@test -d .venv || python3 -m venv .venv
@@ -65,14 +64,6 @@ eval:
 
 score:
 	$(PYTHON) evaluate.py --agent submit.agent --seed 42
-
-# Regenerate scripted-agent baselines for every public scenario. Writes
-# one JSON file per (scenario, seed) pair under baselines/arena/. The
-# committed files are consumed by the arena integration test as the
-# byte-match regression sentinel — re-run this target after any change
-# to the scripted agent, scenario definitions, or scoring pipeline.
-baselines:
-	$(PYTHON) -m arena.baselines
 
 clean:
 	rm -rf .mypy_cache .ruff_cache .pytest_cache

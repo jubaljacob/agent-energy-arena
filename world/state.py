@@ -133,7 +133,8 @@ class WorldState:
     industrial_revenue_per_day: float = 500.0
     commercial_revenue_per_resident_per_day: float = 2.0
     daily_tax_per_capita: float = 4.0
-    blackout_penalty_hour: float = 5000.0
+    outage_penalty_hour: float = 4000.0
+    brownout_flat_penalty_hour: float = 1000.0
     plant_fuel_cost_per_mwh: dict[str, float] = field(
         default_factory=lambda: {"coal_plant": 12.0, "gas_peaker": 30.0}
     )
