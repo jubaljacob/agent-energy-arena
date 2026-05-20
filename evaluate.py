@@ -2,7 +2,7 @@
 
 Two modes:
 
-    python evaluate.py --agent submit.agent --seed 42
+    python evaluate.py --agent agents.scripted --seed 42
         Loads <module>.Agent (a class with __init__(api, *, seed) and a
         .play_game() method, e.g. agents.scripted.ScriptedAgent), plays
         a full game on the given seed, writes the final state alongside

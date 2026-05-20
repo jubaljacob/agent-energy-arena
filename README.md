@@ -4,15 +4,23 @@ A small, readable Python simulation of a city's energy economy, wrapped by a Fas
 
 This is **v1** of the environment. The mechanics are deliberately compact (~3000 lines under `world/`) so they fit in one head and extend in one PR. New world components, scenarios, and agents are the point — see [Contributing](#contributing).
 
-## The challenge
-
-You run a city for 10 simulated years (3650 days; 365 in manual mode). Every simulated hour, supply must match demand or citizens go dark. Every simulated day, the books must close in the black or the treasury dies. An agent's job: build a profitable, populous, reasonably renewable city without bankruptcy and without letting treasury, population, or happiness collapse late.
+You run a city day-by-day. Every day a set of decisions are made by the agent and events occur such as weather, price changes, or population growth. Every simulated hour, supply must match demand or citizens go dark. Every simulated day, the books must close in the black or the treasury dies. An agent's job: build a profitable, populous, reasonably renewable city without bankruptcy and without letting treasury, population, or happiness collapse late. A scenario may be applied to the world to add stress to the game.
 
 `GET /score` returns a single number in `[0, 100]` derived from per-day `states.jsonl` on disk. The formula decomposes treasury, population, and happiness into level / trend / trough triples, then adds a renewable-share term and a solvency term — a peak-and-collapse run cannot outscore a steady, prosperous one. Empty / fresh-reset runs return `{"n_days": 0, "score": 0.0, "components": {}}` so polling clients use one code path.
 
 The world is the single source of truth — a browser UI and AI agents both talk to the same HTTP API. Full mechanics: [RULES.md](RULES.md). Scoring formula and tunable anchors: [`world/scoring.py`](world/scoring.py).
 
+## The EAGE 2026 Hackathon challenge
+Each team of 3 has to submit the following:
+1. An agent that can play the game autonomosly for 2 simulatedyears. The agent will be evaluated against a set of scenarios. The more days it survives and prospers within the given simulation time budget the better. The agent may be LLM, rule, XGBoost, RL-based, etc -- be creative. 
+2. A contribution to the world. This can be a new world component, mechanics, or something that makes the world more interesting (leverage your domain knowledge).
+3. A detailed analysis of the agent's behavior and the world balance.
+
 ## Quickstart
+
+Launch the world in Docker: `docker compose up`, then open `localhost:8000` in a browser and play the game yourself.
+
+or install in virtual environment and run the server:
 
 ```bash
 make install                                              # one-time: pip install -e ".[dev]"
@@ -21,7 +29,7 @@ python evaluate.py --agent agents.scripted --seed 42      # play the scripted re
 make check                                                # lint + format-check + typecheck + test
 ```
 
-Manual play in Docker: `docker compose up`, then open `localhost:8000` in a browser.
+Manual 
 
 ## Talking to the world
 
@@ -88,7 +96,6 @@ scenarios/          # one Python module per shipped stress scenario
   economy_stress.py   fuel shock + crude collapse + regulatory tightening
   tests/              one regression test per shipped scenario
 docs/               # ADRs (docs/adr/) + agent-skill docs (docs/agents/)
-tests/              # top-level CLI tests for evaluate.py
 runs/               # gitignored; one folder per recorded game session
 evaluate.py         # CLI: play one game, or score a recorded run folder
 Dockerfile          # base image used by docker-compose
