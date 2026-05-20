@@ -16,7 +16,7 @@ The world is the single source of truth. Two clients consume the same API: a bro
 |---|---|
 | Understand the game so you can build an agent | [RULES.md](RULES.md) |
 | Look up an endpoint or response shape | [API.md](API.md) |
-| Write a stress scenario | [SCENARIOS.md](SCENARIOS.md) |
+| Write a stress scenario | [scenarios/SCENARIOS.md](scenarios/SCENARIOS.md) |
 | Submit an agent | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Read the domain glossary | [CONTEXT.md](CONTEXT.md) |
 
@@ -85,6 +85,30 @@ print(requests.get(f"{api}/score").json())
 
 The full endpoint list, request/response shapes, and error codes are in [API.md](API.md). The `Agent` protocol in [`agents/base.py`](agents/base.py) wraps the same surface in a typed Python class — `agents/scripted/` is the canonical worked example (rule-based, forms the regression baseline).
 
+## Scenarios
+
+A *scenario* is a thin overlay that steers weather, prices, or the event mix to stress one part of an agent's policy. Three ship under [`scenarios/`](scenarios/): `scenarios.baseline` (identity run), `scenarios.grid_stress` (low-wind + heatwave cluster), `scenarios.economy_stress` (fuel shock + crude collapse + regulatory tightening).
+
+Attach one to an agent run with `--scenario`:
+
+```bash
+# Score the scripted reference agent against grid_stress on its declared seed.
+python evaluate.py --agent agents.scripted --scenario scenarios.grid_stress --seed 42
+
+# Sweep agent × scenario pairs and dump scores to a JSON results file.
+python -m arena.runner \
+    --agent agents.scripted --scenario scenarios.baseline \
+    --scenario scenarios.grid_stress --scenario scenarios.economy_stress \
+    --output results.json
+
+# Regenerate the committed scripted-agent baselines under baselines/arena/.
+make baselines
+```
+
+`GET /score` returns the same `[0, 100]` summary regardless of which scenario is attached — the score is how the agent held up under the scenario's pressure. The browser UI's **Events → Choose scenario** picker attaches one live; the scenario's plan + module source render inline so you can read what it does before pressing Confirm.
+
+How to write your own (dotted path, `apply(world, day)` protocol, override taxonomy, tests, baselines): [scenarios/SCENARIOS.md](scenarios/SCENARIOS.md).
+
 ## Running an LLM agent
 
 `agents/llm_react/` and `agents/langgraph_agent/` build their LLM client from environment variables (see [`agents/llm.py`](agents/llm.py)):
@@ -143,9 +167,11 @@ agents/             # reference agents + community submissions
   langgraph_agent/    LangGraph variant (same provider set)
   community/          one folder per community submission (created on first PR)
 scenarios/          # one Python module per shipped stress scenario
+  SCENARIOS.md        author + runner + scoring guide (lives next to the modules)
   baseline.py         null scenario on seed 42
   grid_stress.py      sustained low-wind + heatwave cluster
   economy_stress.py   fuel shock + crude collapse + regulatory tightening
+  tests/              one regression test per shipped scenario
 arena/              # multi-(agent, scenario) runner
   runner.py           subprocess-isolated runner; `python -m arena.runner`
   baselines.py        regenerates baselines/arena/<scenario>-<seed>.json
