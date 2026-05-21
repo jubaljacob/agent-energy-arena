@@ -26,10 +26,12 @@ TILE_TYPES: list[str] = [
     "house",
     "commercial",
     "industrial",
+    "park",
     "solar_farm",
     "wind_turbine",
     "gas_peaker",
     "coal_plant",
+    "battery",
     "refinery",
     "pipeline",
 ]
