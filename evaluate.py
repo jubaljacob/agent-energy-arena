@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import os
 import shutil
 import sys
@@ -116,6 +117,89 @@ def _load_snapshots(path: Path) -> list[dict[str, Any]]:
                 }
             )
     return snapshots
+
+
+# --- LLM metrics ------------------------------------------------------------
+
+
+class _LLMMetricsRecorder:
+    """Wraps an agent's ``llm`` so each ``chat()`` is timed and its token
+    usage recorded, without the agent knowing.
+
+    The agent calls ``self.llm.chat(...)`` once per planning turn; we
+    intercept that one method, stamp the wall-clock latency around the
+    underlying call, and pull ``input_tokens`` / ``output_tokens`` (plus
+    Anthropic's cache-prefix counts) off the returned ``LLMResponse``.
+    Every other attribute access proxies to the wrapped client, so the
+    recorder is a transparent stand-in for any ``LLMClient`` adapter.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.calls: list[dict[str, float]] = []
+
+    def chat(self, **kwargs: Any) -> Any:
+        t0 = time.monotonic()
+        response = self._inner.chat(**kwargs)
+        latency = time.monotonic() - t0
+        usage = response.usage
+        self.calls.append(
+            {
+                "latency_seconds": latency,
+                "input_tokens": float(usage.input_tokens),
+                "output_tokens": float(usage.output_tokens),
+                "cache_creation_input_tokens": float(usage.cache_creation_input_tokens),
+                "cache_read_input_tokens": float(usage.cache_read_input_tokens),
+            }
+        )
+        return response
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached for attributes not found on the recorder itself,
+        # so the wrapped adapter's `model`, internal client, etc. stay
+        # reachable for any agent that introspects its llm.
+        return getattr(self._inner, name)
+
+    def summary(self) -> dict[str, Any]:
+        """Aggregate the recorded calls into a JSON-friendly breakdown."""
+        n = len(self.calls)
+        latencies = sorted(c["latency_seconds"] for c in self.calls)
+        in_tokens = [c["input_tokens"] for c in self.calls]
+        out_tokens = [c["output_tokens"] for c in self.calls]
+        cache_create = sum(c["cache_creation_input_tokens"] for c in self.calls)
+        cache_read = sum(c["cache_read_input_tokens"] for c in self.calls)
+        total_in = sum(in_tokens)
+        total_out = sum(out_tokens)
+        return {
+            "llm_calls": n,
+            "latency_seconds": {
+                "total": sum(latencies),
+                "mean": (sum(latencies) / n) if n else 0.0,
+                "min": latencies[0] if n else 0.0,
+                "max": latencies[-1] if n else 0.0,
+                "p50": _percentile(latencies, 50),
+                "p95": _percentile(latencies, 95),
+            },
+            "input_tokens": {
+                "total": int(total_in),
+                "mean": (total_in / n) if n else 0.0,
+                "cache_creation": int(cache_create),
+                "cache_read": int(cache_read),
+            },
+            "output_tokens": {
+                "total": int(total_out),
+                "mean": (total_out / n) if n else 0.0,
+            },
+            "total_tokens": int(total_in + total_out + cache_create + cache_read),
+        }
+
+
+def _percentile(sorted_values: list[float], pct: float) -> float:
+    """Nearest-rank percentile of an already-sorted list (0.0 if empty)."""
+    if not sorted_values:
+        return 0.0
+    rank = max(1, math.ceil(pct / 100.0 * len(sorted_values)))
+    return sorted_values[rank - 1]
 
 
 # --- Progress bar -----------------------------------------------------------
@@ -220,6 +304,7 @@ def cmd_eval(
     scenario: str | None = None,
     time_budget: int | None = None,
     days: int | None = None,
+    metrics: bool = False,
 ) -> int:
     AgentCls = _load_agent_class(module_name)
     world: World | None = None
@@ -243,6 +328,22 @@ def cmd_eval(
         api.attach_scenario(scenario)
 
     agent = AgentCls(api, seed=seed)
+
+    # --metrics: intercept the agent's LLM so each chat() is timed and its
+    # token usage tallied. Wrap after construction (the agent's __init__
+    # has already built `self.llm`) and only when the agent actually has
+    # an LLM client — scripted agents have none, so we warn and skip.
+    recorder: _LLMMetricsRecorder | None = None
+    if metrics:
+        inner_llm = getattr(agent, "llm", None)
+        if inner_llm is not None and callable(getattr(inner_llm, "chat", None)):
+            recorder = _LLMMetricsRecorder(inner_llm)
+            agent.llm = recorder  # type: ignore[attr-defined]
+        else:
+            print(
+                "--metrics: agent exposes no `llm.chat`; no LLM metrics collected",
+                file=sys.stderr,
+            )
 
     # T2 clock: start counting once the agent class is in hand. Excludes
     # Python/import startup; includes agent __init__ (graph build for
@@ -316,6 +417,8 @@ def cmd_eval(
         line["wall_time_seconds"] = wall_time_seconds
         line["days_advanced"] = days_advanced
         line["time_scaled_score"] = raw_score * days_advanced / game_days
+    if recorder is not None:
+        line["llm_metrics"] = recorder.summary()
     print(json.dumps(line))
     return 0
 
@@ -386,6 +489,17 @@ def main(argv: list[str] | None = None) -> int:
             "score payload. Omitted = no cap."
         ),
     )
+    parser.add_argument(
+        "--metrics",
+        action="store_true",
+        help=(
+            "Record per-LLM-call latency and token usage. Wraps the "
+            "agent's llm.chat() and emits an `llm_metrics` block "
+            "(call count, latency total/mean/min/max/p50/p95, and "
+            "input/output/cache token totals) in the result line. "
+            "No-op for agents without an LLM (e.g. scripted)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.score is not None:
@@ -404,6 +518,7 @@ def main(argv: list[str] | None = None) -> int:
         args.scenario,
         time_budget=args.time_budget,
         days=args.days,
+        metrics=args.metrics,
     )
 
 
