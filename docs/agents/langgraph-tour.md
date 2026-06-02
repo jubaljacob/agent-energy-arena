@@ -35,11 +35,11 @@ START → observe → plan(LLM) → critique(rules) → execute → step → {ob
 
 | Node | Purpose | Side effects | Source |
 |------|---------|--------------|--------|
-| `_observe` | Snapshot the `World` for this turn. Resets per-turn rejection state. | `GET /state`, `GET /forecast` | `agents/langgraph_agent/agent.py:309` |
-| `_plan` | One LLM call. On a re-plan pass, prepends the previous turn's rejection reasons to the user message. | LLM call only | `agents/langgraph_agent/agent.py:321` |
-| `_critique` | Walks each proposed mutator through the `RULES` list. Batch-aware: tracks running cost so cumulative-funds checks see the whole batch. | pure (reads `state_view`) | `agents/langgraph_agent/agent.py:364` |
-| `_execute` | Dispatches each survivor through the shared `agents.tool_dispatch.dispatch_tool_call`. Unknown tool names return `None` and are silently skipped; `World`-side `RuntimeError`s are swallowed. | `POST /build`, `/demolish`, `/survey`, `/drill`, `/control/well`, `/control/refinery` | `agents/langgraph_agent/agent.py:406` |
-| `_step` | Advance the `World` by `step_days` and refresh `day`. | `POST /step` | `agents/langgraph_agent/agent.py:420` |
+| `_observe` | Snapshot the `World` for this turn. Resets per-turn rejection state. | `GET /state`, `GET /forecast` | `agents/langgraph_agent/agent.py:249` |
+| `_plan` | One LLM call. On a re-plan pass, prepends the previous turn's rejection reasons to the user message. | LLM call only | `agents/langgraph_agent/agent.py:261` |
+| `_critique` | Walks each proposed mutator through the `RULES` list, dropping any a rule vetoes. | pure (reads `state_view`) | `agents/langgraph_agent/agent.py:304` |
+| `_execute` | Dispatches each survivor through the shared `agents.tool_dispatch.dispatch_tool_call`. Unknown tool names return `None` and are silently skipped; `World`-side `RuntimeError`s are swallowed. | `POST /build`, `/demolish`, `/survey`, `/drill`, `/control/well`, `/control/refinery` | `agents/langgraph_agent/agent.py:342` |
+| `_step` | Advance the `World` by `step_days` and refresh `day`. | `POST /step` | `agents/langgraph_agent/agent.py:356` |
 
 Two endpoints are read outside the per-turn loop in `play_game`:
 
@@ -49,7 +49,7 @@ Two endpoints are read outside the per-turn loop in `play_game`:
 
 ## The conditional back-edge
 
-`_route_after_critique` (`agents/langgraph_agent/agent.py:393`)
+`_route_after_critique` (`agents/langgraph_agent/agent.py:329`)
 decides between `plan` and `execute`. The branch to `plan` is taken
 when:
 
@@ -88,36 +88,38 @@ participants:
 
 ### 1. The `RULES` list of critic functions
 
-`RULES` at `agents/langgraph_agent/agent.py:179` is a module-level
+`RULES` at `agents/langgraph_agent/agent.py:125` is a module-level
 `list[RuleFn]`. Each rule is a pure function:
 
 ```python
-def rule(call: ToolCall, state_view: dict[str, Any], running_cost: float) -> str | None: ...
+def rule(call: ToolCall, state_view: dict[str, Any]) -> str | None: ...
 ```
 
 Return a one-line rejection reason to veto the call, or `None` to let
 it through. The reason string is what the next `_plan` pass will see.
-The shipped rules are `out_of_bounds`, `tile_occupied`,
-`cumulative_insufficient_funds`, `no_road_adjacency`, and
-`unknown_well_or_refinery_id` — add your own by appending to the
-list. Rules run in order; the first non-`None` return wins.
+The two shipped rules are `out_of_bounds` and `tile_occupied` — add
+your own by appending to the list. Rules run in order; the first
+non-`None` return wins.
 
-`cumulative_insufficient_funds` is batch-aware: the critic threads
-`running_cost` through survivors so "build four solar farms when the
-treasury covers two" is caught before the `World` accepts the first
-two and rejects the rest.
+The critic is a *fast local pre-flight check, not a second source of
+truth*. The `World` re-validates and rejects every mutation
+server-side (`_execute` swallows those rejections), so the shipped
+rules deliberately stay cheap: they read the `/state` payload only and
+never re-implement `World` economics or topology. When you add a rule,
+keep it in that spirit — a rule that mirrors `World` pricing or the
+road graph will silently drift the moment the `World` changes.
 
 ### 2. The rejection-reason prompt construction in `_plan`
 
 The block that builds the re-plan user message lives inside `_plan`
-at `agents/langgraph_agent/agent.py:326`. Tune the framing the model
+at `agents/langgraph_agent/agent.py:268`. Tune the framing the model
 sees when it has to re-plan — the bullet style, the lead-in sentence,
 the position of `summarize_state(...)` — all live in one place.
 
 ## What each node hands the next
 
 The graph state is the `GraphState` TypedDict at
-`agents/langgraph_agent/agent.py:60`. The contract:
+`agents/langgraph_agent/agent.py:65`. The contract:
 
 - `_observe` writes `obs`, `forecast`, `day`, and resets `rejections`
   and `replan_retries`.

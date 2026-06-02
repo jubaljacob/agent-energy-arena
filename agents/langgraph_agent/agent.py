@@ -15,10 +15,17 @@ to `execute`. The re-plan retry is capped at 1 per turn.
 Two extension surfaces are documented for hackathon participants:
 
   1. The module-level `RULES = [...]` list of critic functions.
-     Append a new pure function `rule(call, state_view, running_cost)`
-     to add a check.
+     Append a new pure function `rule(call, state_view)` to add a check.
   2. The rejection-reason prompt construction inside `_plan`. Tune the
      framing the model receives on the re-plan pass.
+
+The critic is a fast local pre-flight check, not a second source of
+truth: the `World` still validates and rejects every mutation
+server-side (`_execute` swallows those rejections). So the shipped
+rules stay cheap and stable — they read the `/state` payload only and
+never re-implement `World` economics or topology. That keeps this
+file something a student can read top-to-bottom without learning
+`World` internals.
 
 CLI:
   python -m agents.langgraph_agent.agent --seed 42 --days 30   # short demo
@@ -44,8 +51,6 @@ from agents.llm import LLMClient, ToolCall, make_llm_from_env
 from agents.prompts import ACTION_TOOLS, SYSTEM_PROMPT
 from agents.state_summary import summarize_state
 from agents.tool_dispatch import dispatch_tool_call
-from world.catalog import TILE_CATALOG
-from world.subsurface import SEISMIC_BASE_COST, SEISMIC_DEFAULT_SIZE
 
 DEFAULT_STEP_DAYS_FALLBACK: int = 7
 MAX_TOKENS_PER_TURN: int = 2048
@@ -75,16 +80,16 @@ class GraphState(TypedDict, total=False):
 
 # ---------- Critic rules ---------------------------------------------------
 #
-# Each rule is a pure function: given the proposed `ToolCall`, the world
-# `state_view` (the parsed `/state` payload it would mutate), and the
-# running cumulative cost of survivors accepted so far in this batch,
+# Each rule is a pure function: given the proposed `ToolCall` and the
+# world `state_view` (the parsed `/state` payload it would mutate),
 # return a rejection reason string or `None` to let the call through.
-# The `RULES = [...]` list below is the documented extension surface.
+# The `RULES = [...]` list below is the documented extension surface —
+# append your own rule to add a check.
 
-RuleFn = Callable[[ToolCall, dict[str, Any], float], "str | None"]
+RuleFn = Callable[[ToolCall, dict[str, Any]], "str | None"]
 
 
-def out_of_bounds(call: ToolCall, state_view: dict[str, Any], running_cost: float) -> str | None:
+def out_of_bounds(call: ToolCall, state_view: dict[str, Any]) -> str | None:
     """Reject build/demolish/survey/drill calls with an (x, y) outside the world."""
     if call.name not in {"build", "demolish", "survey", "drill"}:
         return None
@@ -101,7 +106,7 @@ def out_of_bounds(call: ToolCall, state_view: dict[str, Any], running_cost: floa
     return f"{call.name}({x},{y}) out_of_bounds (world {w}x{h})"
 
 
-def tile_occupied(call: ToolCall, state_view: dict[str, Any], running_cost: float) -> str | None:
+def tile_occupied(call: ToolCall, state_view: dict[str, Any]) -> str | None:
     """Reject `build` calls onto an already-occupied (x, y) surface tile."""
     if call.name != "build":
         return None
@@ -117,72 +122,7 @@ def tile_occupied(call: ToolCall, state_view: dict[str, Any], running_cost: floa
     return None
 
 
-def cumulative_insufficient_funds(
-    call: ToolCall, state_view: dict[str, Any], running_cost: float
-) -> str | None:
-    """Reject capex-bearing calls that would push the running batch cost over treasury.
-
-    Batch-aware: catches "build four solar farms when you can afford two"
-    before the `World` accepts the first two and rejects the rest.
-    """
-    cost = _cost_of(call, state_view)
-    if cost <= 0:
-        return None
-    treasury = float(state_view.get("treasury", 0.0))
-    if running_cost + cost <= treasury:
-        return None
-    return (
-        f"{call.name}(...) cumulative_insufficient_funds "
-        f"(running ${running_cost:,.0f} + ${cost:,.0f} > treasury ${treasury:,.0f})"
-    )
-
-
-def no_road_adjacency(
-    call: ToolCall, state_view: dict[str, Any], running_cost: float
-) -> str | None:
-    """Reject `build` of a road-requiring tile that has no road-network neighbor."""
-    if call.name != "build":
-        return None
-    tile_type = str(call.arguments.get("tile_type", ""))
-    spec = TILE_CATALOG.get(tile_type)
-    if spec is None or not spec.requires_road:
-        return None
-    try:
-        x = int(call.arguments["x"])
-        y = int(call.arguments["y"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    network = _road_connected_set(state_view.get("tiles") or [])
-    if any((x + dx, y + dy) in network for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
-        return None
-    return f"build({tile_type},{x},{y}) no_road_adjacency"
-
-
-def unknown_well_or_refinery_id(
-    call: ToolCall, state_view: dict[str, Any], running_cost: float
-) -> str | None:
-    """Reject `set_well_rate` / `set_refinery_rate` targeting an id that doesn't exist."""
-    if call.name == "set_well_rate":
-        wid = call.arguments.get("well_id")
-        if any(w.get("id") == wid for w in state_view.get("wells") or []):
-            return None
-        return f"set_well_rate({wid}) unknown_well"
-    if call.name == "set_refinery_rate":
-        rid = call.arguments.get("refinery_id")
-        for t in state_view.get("tiles") or []:
-            if t.get("type") == "refinery" and t.get("id") == rid:
-                return None
-        return f"set_refinery_rate({rid}) unknown_refinery"
-    return None
-
-
-RULES: list[RuleFn] = [
-    out_of_bounds,
-    tile_occupied,
-    cumulative_insufficient_funds,
-    no_road_adjacency,
-    unknown_well_or_refinery_id,
-]
+RULES: list[RuleFn] = [out_of_bounds, tile_occupied]
 
 
 # ---------- Agent ----------------------------------------------------------
@@ -362,24 +302,21 @@ class LangGraphAgent(BaseAgent):
         }
 
     def _critique(self, state: GraphState) -> GraphState:
-        """Per-call gate. Walks each proposed mutator through `RULES`;
-        accumulates the `running_cost` of survivors so the cumulative
-        funds rule is batch-aware. Calls with non-mutator names are
-        passed through to `execute`, which drops them via
-        `dispatch_tool_call` returning `None` (defensive against LLM
-        hallucination)."""
+        """Per-call gate. Walks each proposed mutator through `RULES`.
+        Calls with non-mutator names are passed through to `execute`,
+        which drops them via `dispatch_tool_call` returning `None`
+        (defensive against LLM hallucination)."""
         pending = state.get("pending_calls") or []
         state_view = state.get("obs") or {}
         survivors: list[ToolCall] = []
         rejections: list[str] = []
-        running_cost = 0.0
         for call in pending:
             if call.name not in MUTATOR_TOOLS:
                 survivors.append(call)
                 continue
             reason: str | None = None
             for rule in RULES:
-                r = rule(call, state_view, running_cost)
+                r = rule(call, state_view)
                 if r is not None:
                     reason = r
                     break
@@ -387,7 +324,6 @@ class LangGraphAgent(BaseAgent):
                 rejections.append(reason)
                 continue
             survivors.append(call)
-            running_cost += _cost_of(call, state_view)
         return {"survivors": survivors, "rejections": rejections}
 
     def _route_after_critique(self, state: GraphState) -> str:
@@ -432,70 +368,6 @@ class LangGraphAgent(BaseAgent):
 
 
 # ---------- Helpers --------------------------------------------------------
-
-
-def _cost_of(call: ToolCall, state_view: dict[str, Any]) -> float:
-    """Capex of a single mutator call, mirroring the world's pricing.
-
-    Used by `cumulative_insufficient_funds` to keep the batch running
-    cost in lockstep with what `World.build` / `survey` / `drill` will
-    charge if every survivor lands. Mutators that don't move treasury
-    (demolish refunds, control_*) return 0.
-    """
-    a = call.arguments
-    if call.name == "build":
-        spec = TILE_CATALOG.get(str(a.get("tile_type", "")))
-        return float(spec.capex) if spec is not None else 0.0
-    if call.name == "survey":
-        try:
-            size = int(a.get("size", SEISMIC_DEFAULT_SIZE))
-        except (TypeError, ValueError):
-            size = SEISMIC_DEFAULT_SIZE
-        return SEISMIC_BASE_COST * (size / SEISMIC_DEFAULT_SIZE) ** 2
-    if call.name == "drill":
-        well_type = str(a.get("well_type", "production"))
-        spec_type = "oil_well" if well_type == "production" else "injection_well"
-        spec = TILE_CATALOG.get(spec_type)
-        if spec is None:
-            return 0.0
-        try:
-            target_z = int(a.get("target_z", 0))
-        except (TypeError, ValueError):
-            target_z = 0
-        world_d = max(1, int((state_view.get("config") or {}).get("world_d", 1)))
-        return float(spec.capex) * (1 + (target_z / world_d) ** 2)
-    return 0.0
-
-
-def _road_connected_set(tiles: list[dict[str, Any]]) -> set[tuple[int, int]]:
-    """4-connected flood-fill of road/town_hall tiles from the town hall.
-
-    Pure helper — operates on the dicts in `state_view["tiles"]` rather
-    than the `Tile` dataclass instances, so the rules can run against a
-    parsed `/state` payload without importing world internals.
-    """
-    by_pos: dict[tuple[int, int], dict[str, Any]] = {(int(t["x"]), int(t["y"])): t for t in tiles}
-    start: tuple[int, int] | None = None
-    for pos, t in by_pos.items():
-        if t.get("type") == "town_hall":
-            start = pos
-            break
-    if start is None:
-        return set()
-    seen: set[tuple[int, int]] = {start}
-    stack: list[tuple[int, int]] = [start]
-    while stack:
-        x, y = stack.pop()
-        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            n = (x + dx, y + dy)
-            if n in seen:
-                continue
-            tile = by_pos.get(n)
-            if tile is None or tile.get("type") not in {"road", "town_hall"}:
-                continue
-            seen.add(n)
-            stack.append(n)
-    return seen
 
 
 def _clamp_days(raw: Any) -> int:

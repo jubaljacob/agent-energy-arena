@@ -5,7 +5,7 @@ LangGraph is an OPTIONAL dependency (declared under
 whole module skips — AFK CI without the extra installed still passes.
 
 Coverage:
-- One unit test per critic rule (5 tests) — pure functions, no graph.
+- One unit test per critic rule (2 tests) — pure functions, no graph.
 - `_route_after_critique` returns the `plan` target on full rejection.
 - `_route_after_critique` routes forward to `execute` on partial rejection.
 - The 1-retry cap is honored (second full rejection proceeds to execute).
@@ -28,13 +28,7 @@ from fastapi.testclient import TestClient
 
 from agents.api_client import ApiClient
 from agents.langgraph_agent import LangGraphAgent
-from agents.langgraph_agent.agent import (
-    cumulative_insufficient_funds,
-    no_road_adjacency,
-    out_of_bounds,
-    tile_occupied,
-    unknown_well_or_refinery_id,
-)
+from agents.langgraph_agent.agent import out_of_bounds, tile_occupied
 from agents.llm import LLMResponse, MockLLM, ToolCall, Usage
 from world.api import create_app
 from world.sim import World
@@ -58,17 +52,14 @@ def _step_only_mock() -> MockLLM:
 
 def test_rule_out_of_bounds_rejects_negative_or_oversize_coords() -> None:
     state_view = {"config": {"world_w": 16, "world_h": 16}}
-    reason = out_of_bounds(
-        ToolCall("build", {"tile_type": "road", "x": 20, "y": 5}), state_view, 0.0
-    )
+    reason = out_of_bounds(ToolCall("build", {"tile_type": "road", "x": 20, "y": 5}), state_view)
     assert reason is not None and "out_of_bounds" in reason
     # In-bounds is None.
     assert (
-        out_of_bounds(ToolCall("build", {"tile_type": "road", "x": 5, "y": 5}), state_view, 0.0)
-        is None
+        out_of_bounds(ToolCall("build", {"tile_type": "road", "x": 5, "y": 5}), state_view) is None
     )
     # Rule ignores non-coord-bearing tools.
-    assert out_of_bounds(ToolCall("set_well_rate", {"well_id": "w-1"}), state_view, 0.0) is None
+    assert out_of_bounds(ToolCall("set_well_rate", {"well_id": "w-1"}), state_view) is None
 
 
 def test_rule_tile_occupied_rejects_build_on_existing_tile() -> None:
@@ -76,85 +67,13 @@ def test_rule_tile_occupied_rejects_build_on_existing_tile() -> None:
         "config": {"world_w": 16, "world_h": 16},
         "tiles": [{"x": 5, "y": 5, "type": "house"}],
     }
-    reason = tile_occupied(
-        ToolCall("build", {"tile_type": "road", "x": 5, "y": 5}), state_view, 0.0
-    )
+    reason = tile_occupied(ToolCall("build", {"tile_type": "road", "x": 5, "y": 5}), state_view)
     assert reason is not None and "tile_occupied" in reason
     assert (
-        tile_occupied(ToolCall("build", {"tile_type": "road", "x": 6, "y": 5}), state_view, 0.0)
-        is None
+        tile_occupied(ToolCall("build", {"tile_type": "road", "x": 6, "y": 5}), state_view) is None
     )
     # Non-build calls bypass the rule.
-    assert tile_occupied(ToolCall("survey", {"x": 5, "y": 5}), state_view, 0.0) is None
-
-
-def test_rule_cumulative_insufficient_funds_is_batch_aware() -> None:
-    # Treasury covers two solar farms ($25k each) but not three.
-    state_view = {
-        "config": {"world_w": 16, "world_h": 16, "world_d": 10},
-        "treasury": 60_000.0,
-    }
-    call = ToolCall("build", {"tile_type": "solar_farm", "x": 1, "y": 1})
-    # First build: running 0 + 25k <= 60k → allowed.
-    assert cumulative_insufficient_funds(call, state_view, 0.0) is None
-    # Second build: 25k + 25k <= 60k → allowed.
-    assert cumulative_insufficient_funds(call, state_view, 25_000.0) is None
-    # Third build: 50k + 25k > 60k → rejected.
-    reason = cumulative_insufficient_funds(call, state_view, 50_000.0)
-    assert reason is not None and "cumulative_insufficient_funds" in reason
-
-
-def test_rule_no_road_adjacency_rejects_house_off_the_road_network() -> None:
-    # Road network = town hall at (4,4) only; (10,10) is not adjacent.
-    state_view = {
-        "config": {"world_w": 16, "world_h": 16},
-        "tiles": [{"x": 4, "y": 4, "type": "town_hall"}],
-    }
-    reason = no_road_adjacency(
-        ToolCall("build", {"tile_type": "house", "x": 10, "y": 10}), state_view, 0.0
-    )
-    assert reason is not None and "no_road_adjacency" in reason
-    # (4, 5) is adjacent to town_hall → allowed.
-    assert (
-        no_road_adjacency(
-            ToolCall("build", {"tile_type": "house", "x": 4, "y": 5}), state_view, 0.0
-        )
-        is None
-    )
-    # Non-road-requiring tile (solar_farm) bypasses the rule.
-    assert (
-        no_road_adjacency(
-            ToolCall("build", {"tile_type": "solar_farm", "x": 10, "y": 10}), state_view, 0.0
-        )
-        is None
-    )
-
-
-def test_rule_unknown_well_or_refinery_id_rejects_missing_ids() -> None:
-    state_view = {
-        "wells": [{"id": "well-1", "type": "production"}],
-        "tiles": [{"id": "refinery-2", "type": "refinery", "x": 1, "y": 1}],
-    }
-    bad_well = unknown_well_or_refinery_id(
-        ToolCall("set_well_rate", {"well_id": "ghost", "rate_bbl_day": 100}), state_view, 0.0
-    )
-    assert bad_well is not None and "unknown_well" in bad_well
-    good_well = unknown_well_or_refinery_id(
-        ToolCall("set_well_rate", {"well_id": "well-1", "rate_bbl_day": 100}), state_view, 0.0
-    )
-    assert good_well is None
-    bad_ref = unknown_well_or_refinery_id(
-        ToolCall("set_refinery_rate", {"refinery_id": "missing", "rate_bbl_day": 50}),
-        state_view,
-        0.0,
-    )
-    assert bad_ref is not None and "unknown_refinery" in bad_ref
-    good_ref = unknown_well_or_refinery_id(
-        ToolCall("set_refinery_rate", {"refinery_id": "refinery-2", "rate_bbl_day": 50}),
-        state_view,
-        0.0,
-    )
-    assert good_ref is None
+    assert tile_occupied(ToolCall("survey", {"x": 5, "y": 5}), state_view) is None
 
 
 # ---------- Routing -------------------------------------------------------
