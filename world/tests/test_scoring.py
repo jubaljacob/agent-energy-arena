@@ -149,7 +149,7 @@ def test_flat_run_at_starting_state_scores_near_50():
     snaps = _flat_run(
         100,
         treasury=STARTING_CASH,
-        population=POP_TARGET,  # u_pop = 1 - exp(-1) ≈ 0.632
+        population=POP_TARGET / 2,  # u_pop = 0.5 (half the completion target)
         happiness=HAPPINESS_CEIL / 2,  # u_happy = 0.5
         renewable_kwh=0.2,
         total_kwh=1.0,
