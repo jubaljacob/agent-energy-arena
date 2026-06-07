@@ -15,7 +15,7 @@ PYTHON ?= $(shell \
 
 help:
 	@echo "Targets:"
-	@echo "  install       Install package with dev+llm extras into the active env"
+	@echo "  install       Install package with dev extras into the active env"
 	@echo "  venv          Create .venv if it does not already exist"
 	@echo "  test          Run pytest"
 	@echo "  typecheck     Run mypy"
@@ -33,7 +33,7 @@ venv:
 	@$(PYTHON) -m pip install --upgrade pip >/dev/null
 
 install: venv
-	$(PYTHON) -m pip install -e ".[dev,llm]"
+	$(PYTHON) -m pip install -e ".[dev]"
 
 test:
 	$(PYTHON) -m pytest
