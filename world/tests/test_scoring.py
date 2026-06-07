@@ -29,6 +29,7 @@ import pytest
 from world.scoring import (
     CVAR_ALPHA,
     HAPPINESS_CEIL,
+    LONGEVITY_TARGET_DAYS,
     POP_TARGET,
     RENEWABLE_TARGET,
     compute_score,
@@ -52,6 +53,7 @@ COMPONENT_KEYS = {
     "R",
     "renewable_share",
     "solvency",
+    "longevity",
 }
 
 
@@ -295,6 +297,29 @@ def test_trend_credits_signal_saturated_at_ceiling():
     assert out["components"]["axis_happy"] == pytest.approx(1.0)
 
 
+def test_treasury_trend_registers_late_collapse():
+    """A run that climbs then collapses in its final stretch — ending
+    well below its endowment — scores a treasury trend BELOW the
+    no-growth midpoint. The recent-window slope sees the decline that a
+    full-run slope nets against the earlier climb and hides at ~neutral.
+    """
+    n = 400
+    peak = 0.5  # treasury peaks at the midpoint, then bleeds out
+    snaps = []
+    for i in range(n):
+        frac = i / (n - 1)
+        if frac <= peak:
+            t = STARTING_CASH + (frac / peak) * 200_000.0  # climb to +200k
+        else:
+            f2 = (frac - peak) / (1.0 - peak)
+            t = STARTING_CASH + 200_000.0 - f2 * 600_000.0  # collapse to -400k
+        snaps.append(
+            _snapshot(treasury=t, population=200.0, happiness=1.0, renewable_kwh=1.0, total_kwh=2.0)
+        )
+    out = compute_score(snaps, STARTING_CASH)
+    assert out["components"]["trend_treasury"] < 0.5
+
+
 def test_trend_treasury_credits_sustained_high_level():
     """A treasury parked at a huge surplus for the entire run scores
     trend ≈ 1, not 0.5. The recent-window utility carries the day when
@@ -339,11 +364,12 @@ def test_renewable_R_saturates_at_target_share():
 
 def test_perfect_run_scores_within_one_point_of_one_hundred():
     """A synthetic perfect run (all axes saturated, R at target,
-    treasury positive every day) lands at score >= 99. Pre-ADR-0005
-    the structural ceiling was ~85, with the happiness-trend fixed
-    point and the linear-R term jointly forfeiting ~15 points."""
+    treasury positive every day) lands at score >= 99 — but only once it
+    also clears the longevity horizon. A run that saturates every axis
+    yet stops short of `target_days` cannot reach 100, because the
+    additive longevity term is itself below 1.0."""
     snaps = _flat_run(
-        200,
+        LONGEVITY_TARGET_DAYS,  # full 2-year horizon → longevity = 1.0
         treasury=STARTING_CASH + 1e9,
         population=1e6,
         happiness=HAPPINESS_CEIL,
@@ -352,3 +378,68 @@ def test_perfect_run_scores_within_one_point_of_one_hundred():
     )
     out = compute_score(snaps, STARTING_CASH)
     assert out["score"] >= 99.0
+    assert out["components"]["longevity"] == pytest.approx(1.0)
+
+
+def test_longevity_ramps_below_target_and_orders_by_length():
+    """The longevity term is a linear ramp to full credit at
+    `target_days`. Two identical trajectories of different lengths: the
+    longer run scores strictly higher, purely on longevity."""
+    base = dict(
+        treasury=STARTING_CASH,
+        population=200.0,
+        happiness=1.0,
+        renewable_kwh=1.0,
+        total_kwh=2.0,
+    )
+    short = compute_score(_flat_run(100, **base), STARTING_CASH)
+    longer = compute_score(_flat_run(700, **base), STARTING_CASH)
+    assert short["components"]["longevity"] == pytest.approx(100 / LONGEVITY_TARGET_DAYS)
+    assert longer["components"]["longevity"] == pytest.approx(700 / LONGEVITY_TARGET_DAYS)
+    assert longer["score"] > short["score"]
+
+
+def test_longevity_flat_at_one_at_and_beyond_target():
+    """At and beyond `target_days` the longevity term saturates at 1.0;
+    extra survival earns no marginal longevity credit."""
+    base = dict(
+        treasury=STARTING_CASH,
+        population=200.0,
+        happiness=1.0,
+        renewable_kwh=1.0,
+        total_kwh=2.0,
+    )
+    at = compute_score(_flat_run(LONGEVITY_TARGET_DAYS, **base), STARTING_CASH)
+    beyond = compute_score(_flat_run(LONGEVITY_TARGET_DAYS * 2, **base), STARTING_CASH)
+    assert at["components"]["longevity"] == pytest.approx(1.0)
+    assert beyond["components"]["longevity"] == pytest.approx(1.0)
+    # The two runs differ only past the saturation point, so the only
+    # length-driven term (longevity) is identical — scores match.
+    assert at["score"] == pytest.approx(beyond["score"])
+
+
+def test_longevity_cannot_overturn_a_clear_trajectory_gap():
+    """Additive longevity moves at most `_W_LONGEVITY * 100` points, so a
+    short run with a strong, saturated trajectory still beats a long run
+    that merely survives at a mediocre state."""
+    short_excellent = [
+        _snapshot(
+            treasury=STARTING_CASH + 2_000_000.0 + i * 20_000.0,
+            population=400.0 + i,
+            happiness=HAPPINESS_CEIL,
+            renewable_kwh=RENEWABLE_TARGET,
+            total_kwh=1.0,
+        )
+        for i in range(180)
+    ]
+    long_mediocre = _flat_run(
+        LONGEVITY_TARGET_DAYS * 2,
+        treasury=STARTING_CASH,
+        population=100.0,
+        happiness=HAPPINESS_CEIL / 2,
+        renewable_kwh=0.1,
+        total_kwh=1.0,
+    )
+    s_short = compute_score(short_excellent, STARTING_CASH)["score"]
+    s_long = compute_score(long_mediocre, STARTING_CASH)["score"]
+    assert s_short > s_long

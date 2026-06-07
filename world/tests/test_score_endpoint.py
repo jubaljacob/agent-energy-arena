@@ -34,6 +34,7 @@ COMPONENT_KEYS = {
     "R",
     "renewable_share",
     "solvency",
+    "longevity",
 }
 
 

@@ -161,4 +161,79 @@ same saturation shape as `R`. This credits realistic city sizes and
 makes "did the city reach a self-sustaining population?" a reachable
 objective rather than an unreachable asymptote.
 
+## Longevity component
+
+The hackathon rewards agents that survive *and* prosper for ~2 simulated
+years within a wall-clock budget, so the score needs a survival term.
+Two shapes were on the table:
+
+- **A multiplier** `score = base × L`, with `L` ramping from a floor to
+  1.0 at the target horizon. Duration scales the whole score.
+- **An additive component** `headline = (1 - w)·base + w·L`, with `L`
+  ramping 0→1. Duration adds at most `w·100` points.
+
+We chose **additive**. A multiplier makes duration scale *everything*,
+so in a large duration gap a long-but-flat run can out-score a short-but-
+thriving one — we measured exactly this on real runs while tuning a
+floor-0.4 multiplier (a 414-day flat run beat a 237-day climbing run).
+The additive term bounds duration's influence: with `_W_LONGEVITY =
+0.15`, longevity moves the headline by at most 15 points and can never
+overturn a real trajectory gap. Now that the treasury and population
+axes actually measure trajectory (see the two sections above), letting
+trajectory dominate is both possible and correct.
+
+    longevity = min(1.0, n_days / target_days)        # target_days = 730
+    base      = Σ (the five existing terms, weights summing to 1.0)
+    headline  = 100 · ((1 - _W_LONGEVITY)·base + _W_LONGEVITY·longevity)
+
+`longevity` ramps linearly to full credit at `LONGEVITY_TARGET_DAYS =
+730` (2 years) and is flat at 1.0 above — extra survival past the target
+earns no marginal longevity credit, mirroring how `R` and `u_pop`
+saturate. The five base terms are scaled by `(1 - _W_LONGEVITY)` so the
+headline stays in `[0, 100]`; this draws the longevity weight
+*proportionally* from all five, preserving their relative balance rather
+than gutting the two cheap terms. `target_days` is a `compute_score`
+parameter (default the constant) so a caller — `evaluate.py
+--target-years`, a future `/score?target_years=` — can rescore against a
+different horizon without touching the formula.
+
+A consequence worth stating: the perfect-score ceiling now requires
+*both* a saturated trajectory and clearing the 2-year horizon. A run
+that maxes every axis but stops at 1 year tops out around 92, not 100 —
+which is the intended signage for "great, but it didn't go the
+distance."
+
+## Recency-weighted treasury trend
+
+`trend_treasury` originally took the linear slope of `treasury_delta`
+over the **whole** run. For a run that climbs then collapses, the early
+rise and the late fall net out, so the slope — and the trend term —
+read ~0.5 (neutral) even as the city bled into insolvency in its final
+stretch. The `max(growth, recent_u)` join didn't rescue it either:
+`growth` sat at the flat-slope 0.5, which is *above* the declining
+recent-level utility, so the `max` kept 0.5.
+
+The fix: `growth_treasury` now reads the slope of the **trailing
+window** (`treasury_delta[-window:]`, the same `RECENT_WINDOW_FRACTION`
+quarter used by `recent_u`), so "trend" means "where treasury is heading
+lately," not "over the whole game." A run still climbing in its last
+quarter scores high; a run collapsing in its last quarter scores low.
+The `max(growth, recent_u)` structure is unchanged, so a treasury parked
+at a surplus (zero recent slope, high recent level) still gets full
+trend credit — the ADR's saturated-high case is preserved.
+
+Scope: this applies to the treasury axis only. Population and happiness
+use `_trend_cagr` (an end-to-end CAGR), and neither exhibited the
+hide-the-collapse failure on the runs reviewed; extending the same
+recency treatment to them is a future option, not done here.
+
+A known limit: the window is a quarter, so a collapse confined to the
+*final few days* (shorter than the window) is intentionally not enough
+to tank the trend — the same "no final-day windfall" symmetry the
+quarter-window was chosen for in the saturation reshape above. And a
+collapse *from a large surplus* that stays above the endowment for most
+of the window still reads near-neutral (the window was mostly healthy);
+catching that would need a drawdown term, which is deliberately out of
+scope here.
+
 [shallow module]: ../../.claude/skills/improve-codebase-architecture/LANGUAGE.md
